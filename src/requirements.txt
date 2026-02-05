@@ -1,0 +1,6 @@
+pyside6
+google-genai
+pyautogui
+pyaudio
+SpeechRecognition
+python-dotenv
