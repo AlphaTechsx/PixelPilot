@@ -2,16 +2,11 @@ import sys
 import os
 import ctypes
 import logging
-from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import qInstallMessageHandler
+from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtCore import qInstallMessageHandler, Qt
+from PySide6.QtGui import QPixmap, QShortcut, QKeySequence, QPainter, QColor
 from PySide6.QtWidgets import QMessageBox
-from PySide6.QtGui import QShortcut, QKeySequence
-from PySide6.QtCore import Qt
-from ui.main_window import MainWindow
-from ui.gui_adapter import GuiAdapter
-from core.controller import MainController
-from core.logging_setup import configure_logging, attach_gui_logging
-from ui.global_hotkeys import GlobalHotkeyManager, MOD_CONTROL, MOD_SHIFT
+from PySide6.QtSvg import QSvgRenderer
 
 class GuiStream:
     def __init__(self, logger: logging.Logger, is_error: bool = False):
@@ -112,13 +107,42 @@ def _install_qt_message_router(logger: logging.Logger):
     qInstallMessageHandler(_handler)
 
 def main():
+    app = QApplication(sys.argv)
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.ico")
+    if not os.path.exists(logo_path):
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.svg")
+
+    splash = None
+    if os.path.exists(logo_path):
+        if logo_path.endswith(".svg"):
+            renderer = QSvgRenderer(logo_path)
+            if renderer.isValid():
+                pixmap = QPixmap(800, 300)
+                pixmap.fill(QColor("transparent"))
+                painter = QPainter(pixmap)
+                renderer.render(painter)
+                painter.end()
+                splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
+        else:
+            pixmap = QPixmap(logo_path)
+            if not pixmap.isNull():
+                 splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
+
+        if splash:
+            splash.show()
+            app.processEvents()
+
+    from ui.main_window import MainWindow
+    from ui.gui_adapter import GuiAdapter
+    from core.controller import MainController
+    from core.logging_setup import configure_logging, attach_gui_logging
+    from ui.global_hotkeys import GlobalHotkeyManager, MOD_CONTROL, MOD_SHIFT
+
     early_qt_messages: list[tuple[object, str]] = []
     _install_qt_message_collector(early_qt_messages)
 
     logger, buffered_gui, log_file_path = configure_logging(adapter=None)
     logger.debug("Pixel Pilot starting")
-
-    app = QApplication(sys.argv)
 
     def is_admin() -> bool:
         try:
@@ -251,6 +275,10 @@ def main():
             logger.debug(msg)
     
     window.show()
+    # Close splash screen when main window is visible
+    if splash:
+        splash.finish(window)
+        
     logger.debug("Pixel Pilot GUI shown")
     sys.exit(app.exec())
 
