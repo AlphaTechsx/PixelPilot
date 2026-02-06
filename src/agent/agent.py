@@ -833,7 +833,6 @@ class AgentOrchestrator:
                     or action.get("no_verification", False)
                 ):
                     print("\n [INFO] Skipping verification as requested by action plan.")
-                    print(f"\n TASK COMPLETED: {user_command}")
                     action["task_complete"] = True
                 else:
                     try:
@@ -869,7 +868,7 @@ class AgentOrchestrator:
                                     is_actually_complete
                                     and confidence >= Config.VERIFICATION_MIN_CONFIDENCE
                                 ):
-                                    print(f"\n TASK VERIFIED AND COMPLETED: {user_command}")
+                                    print(f"   [SUCCESS] Verification passed (Confidence: {confidence:.0%})")
                                     action["task_complete"] = True
                                 else:
                                     print("\n Task not verified as complete")
