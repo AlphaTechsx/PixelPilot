@@ -134,6 +134,29 @@ def compile_script(script_path: Path, exe_name: str, python_exe: str | None = No
     return None
 
 
+def relax_power_settings(task_name: str) -> None:
+    """Allow the task to run on battery power."""
+
+    print(f"[*] Relaxing power settings for task: {task_name}")
+    ps_cmd = (
+        f"$s = Get-ScheduledTask -TaskName '{task_name}'; "
+        "if ($s) { "
+        "$s.Settings.DisallowStartIfOnBatteries = $false; "
+        "$s.Settings.StopIfGoingOnBatteries = $false; "
+        f"Set-ScheduledTask -TaskName '{task_name}' -Settings $s.Settings "
+        "}"
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_cmd],
+            check=True,
+            capture_output=True
+        )
+        print(f"[+] Power settings relaxed for {task_name}.")
+    except subprocess.CalledProcessError as e:
+        print(f"[-] Failed to relax power settings for {task_name}: {e}")
+
+
 def create_system_task(exe_path: str) -> None:
     print(f"[*] Creating Service Task: {ORCHESTRATOR_TASK_NAME}")
     cmd = [
@@ -153,6 +176,9 @@ def create_system_task(exe_path: str) -> None:
     ]
     subprocess.run(cmd, capture_output=True)
     print("[+] Service Task Created. Starting it now...")
+    
+    relax_power_settings(ORCHESTRATOR_TASK_NAME)
+    
     subprocess.run(["schtasks", "/Run", "/TN", ORCHESTRATOR_TASK_NAME], capture_output=True)
 
 
@@ -230,6 +256,7 @@ def create_launcher_task(script_path: Path, python_exe: str | None = None, log_p
         print(f"[-] Failed to create launcher task: {result.stdout} {result.stderr}")
     else:
         print("[+] Launcher Task Created.")
+        relax_power_settings(MAIN_APP_TASK_NAME)
 
 
 def create_desktop_shortcut() -> None:
