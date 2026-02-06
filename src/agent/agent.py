@@ -868,6 +868,8 @@ class AgentOrchestrator:
                                 else:
                                     print("\n Task not verified as complete")
                                     action["task_complete"] = False
+                                    action["verification_failed"] = True
+                                    action["verification_reasoning"] = reasoning
                             else:
                                 print("\n Verification returned no result")
                                 print("   Trusting AI's assessment: task complete")
@@ -935,6 +937,11 @@ class AgentOrchestrator:
                         "\n".join(
                             [
                                 f"Step {i + 1}: {step['action_type']} - {step['reasoning']}"
+                                + (
+                                    f" [VERIFICATION FAILED: {step['verification_reasoning']}]"
+                                    if step.get("verification_failed")
+                                    else ""
+                                )
                                 for i, step in enumerate(self.task_history)
                             ]
                         )
@@ -1010,6 +1017,11 @@ class AgentOrchestrator:
                     "\n".join(
                         [
                             f"Step {i + 1}: {step['action_type']} - {step['reasoning']}"
+                            + (
+                                f" [VERIFICATION FAILED: {step['verification_reasoning']}]"
+                                if step.get("verification_failed")
+                                else ""
+                            )
                             for i, step in enumerate(self.task_history)
                         ]
                     )
