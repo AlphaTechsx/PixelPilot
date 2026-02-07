@@ -207,6 +207,21 @@ class ChatWidget(QWidget):
         self.input_hint.setWordWrap(True)
         layout.addWidget(self.input_hint)
 
+        self.guidance_bar = QFrame()
+        self.guidance_bar.setObjectName("guidanceBar")
+        g = QHBoxLayout(self.guidance_bar)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setSpacing(0)
+        g.addStretch()
+
+        self.guidance_btn = QPushButton("Next Step")
+        self.guidance_btn.setObjectName("guidanceBtn")
+        self.guidance_btn.setFixedSize(110, 32)
+        self.guidance_btn.setVisible(False)
+        g.addWidget(self.guidance_btn)
+        self.guidance_bar.setVisible(False)
+        layout.addWidget(self.guidance_bar)
+
         self.input_frame = QFrame()
         self.input_frame.setObjectName("inputFrame")
         i = QHBoxLayout(self.input_frame)
@@ -221,11 +236,6 @@ class ChatWidget(QWidget):
         self.mic_btn.setObjectName("micBtn")
         self.mic_btn.setFixedSize(34, 34)
         self.mic_btn.setToolTip("Start listening")
-        
-        self.guidance_btn = QPushButton("Next Step")
-        self.guidance_btn.setObjectName("guidanceBtn")
-        self.guidance_btn.setFixedSize(80, 34)  # Wider and taller for visibility
-        self.guidance_btn.setVisible(False)
 
         self.send_btn = QPushButton("→")
         self.send_btn.setObjectName("sendBtn")
@@ -233,7 +243,6 @@ class ChatWidget(QWidget):
         
         i.addWidget(self.input_field)
         i.addWidget(self.mic_btn)
-        i.addWidget(self.guidance_btn)
         i.addWidget(self.send_btn)
         
         layout.addWidget(self.input_frame)
@@ -283,6 +292,7 @@ class ChatWidget(QWidget):
             QPushButton#closeBtn:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #220909, stop:1 #300810); border-color: #b91c1c; }
             QTextEdit#chatDisplay { background: rgba(20, 34, 50, 170); color: #d4d4d4; border: none; font: 15px 'Segoe UI', 'Inter', sans-serif; padding: 8px; }
             QLabel#inputHint { color: #8fb7d6; font: 12px 'Segoe UI', 'Inter', sans-serif; padding: 2px 4px; }
+            QFrame#guidanceBar { background: transparent; }
             QWidget#voiceVisualizer { background: rgba(18, 32, 48, 165); border: 1px solid rgba(46, 72, 96, 170); border-radius: 10px; }
             QPushButton#compactStopBtn { background: rgba(12, 24, 36, 170); color: #bfe6ff; border: 1px solid rgba(52, 78, 102, 170); border-radius: 8px; font: 700 11px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.3px; padding: 4px 10px; }
             QPushButton#compactStopBtn:hover { background: rgba(14, 30, 46, 190); border-color: #057FCA; color: #e9f6ff; }
@@ -321,6 +331,7 @@ class ChatWidget(QWidget):
                     msg["expanded"] = not bool(msg.get("expanded"))
                     break
             self._render_chat()
+            return
 
     def _start_turn(self):
         self._turn_active = True
@@ -699,7 +710,7 @@ class ChatWidget(QWidget):
         # Backwards-compat: this method now appends to an internal model then re-renders.
         self._append_to_model(kind=kind, text=text)
 
-    def _insert_bubble(self, cursor: QTextCursor, *, kind: str, text: str):
+    def _insert_bubble(self, cursor: QTextCursor, *, kind: str, text: str, actions: list[dict] | None = None):
         kind_key = (kind or "").lower().strip()
 
         viewport_width = max(300, self.chat_display.viewport().width())
@@ -762,6 +773,7 @@ class ChatWidget(QWidget):
 
         cursor.insertBlock(block_format)
         cursor.insertText(text, char_format)
+
         cursor.insertBlock()
 
     def _render_thinking(self, cursor: QTextCursor, msg: dict):
@@ -841,7 +853,7 @@ class ChatWidget(QWidget):
                 text = msg.get("text")
                 if text is None:
                     continue
-                self._insert_bubble(cursor, kind=kind, text=str(text))
+                self._insert_bubble(cursor, kind=kind, text=str(text), actions=msg.get("actions"))
             self.chat_display.setTextCursor(cursor)
             self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
         finally:
@@ -913,6 +925,7 @@ class ChatWidget(QWidget):
         payload = self._guidance_payload
         self._guidance_payload = None
         self._guidance_active = False
+        self.guidance_bar.hide()
         self.guidance_btn.hide()
 
         payload["result"] = False
@@ -1044,6 +1057,7 @@ class ChatWidget(QWidget):
             self.voice_visualizer.hide()
             self.voice_visualizer.set_active(False)
             self.compact_stop_btn.hide()
+            self.guidance_bar.hide()
             self.guidance_btn.hide()
             if self.header.layout():
                 self.header.layout().invalidate()
@@ -1059,6 +1073,7 @@ class ChatWidget(QWidget):
                 self.voice_visualizer.show()
                 self.voice_visualizer.set_active(True)
                 self.compact_stop_btn.show()
+                self.guidance_bar.hide()
                 self.guidance_btn.hide()
             else:
                 self.chat_display.show()
@@ -1067,13 +1082,15 @@ class ChatWidget(QWidget):
                     self.input_hint.hide()
                 else:
                     self.input_hint.show()
+                if self._guidance_active or self._guidance_input_active:
+                    self.guidance_bar.show()
+                    self.guidance_btn.show()
+                else:
+                    self.guidance_bar.hide()
+                    self.guidance_btn.hide()
                 self.voice_visualizer.hide()
                 self.voice_visualizer.set_active(False)
                 self.compact_stop_btn.hide()
-                if self._guidance_active:
-                    self.guidance_btn.show()
-                else:
-                    self.guidance_btn.hide()
             return
 
         # full
@@ -1085,9 +1102,11 @@ class ChatWidget(QWidget):
             self.input_hint.show()
         self.dropdowns.show()
         self.compact_stop_btn.hide()
-        if self._guidance_active:
+        if self._guidance_active or self._guidance_input_active:
+            self.guidance_bar.show()
             self.guidance_btn.show()
         else:
+            self.guidance_bar.hide()
             self.guidance_btn.hide()
         if listening:
             self.voice_visualizer.show()
@@ -1110,12 +1129,14 @@ class ChatWidget(QWidget):
         self._guidance_active = True
         self.guidance_btn.setText(text)
         self.guidance_btn.setEnabled(True)
+        self.guidance_bar.show()
         self.guidance_btn.show()
         self._apply_view_mode()
 
     def hide_guidance_button(self):
         self._guidance_payload = None
         self._guidance_active = False
+        self.guidance_bar.hide()
         self.guidance_btn.hide()
         self._apply_view_mode()
 
@@ -1127,11 +1148,14 @@ class ChatWidget(QWidget):
         """
         self._guidance_input_payload = payload
         self._guidance_input_active = True
-        # Update placeholder to guide the user
-        self.input_field.setPlaceholderText("> Type 'done', ask a question, or describe what happened...")
-        # Show the Next button alongside the input
-        self.guidance_btn.setText("Next Step")
+        label = (payload.get("label") or "Next").strip() or "Next"
+        if payload.get("final"):
+            self.input_field.setPlaceholderText("> Click Done to finish or type a reply...")
+        else:
+            self.input_field.setPlaceholderText("> Type 'done', ask a question, or describe what happened...")
+        self.guidance_btn.setText(label)
         self.guidance_btn.setEnabled(True)
+        self.guidance_bar.show()
         self.guidance_btn.show()
         self._apply_view_mode()
 
@@ -1141,6 +1165,7 @@ class ChatWidget(QWidget):
             payload = self._guidance_input_payload
             self._guidance_input_payload = None
             self._guidance_input_active = False
+            self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.input_field.setPlaceholderText("> Type a command...")
             # Set "done" as the default input when clicking Next
@@ -1153,8 +1178,10 @@ class ChatWidget(QWidget):
         payload = self._guidance_payload
         self._guidance_payload = None
         self._guidance_active = False
+        self.guidance_bar.hide()
         self.guidance_btn.hide()
         if isinstance(payload, dict):
             payload["result"] = True
             payload["event"].set()
+
 

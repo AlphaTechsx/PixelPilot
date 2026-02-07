@@ -186,6 +186,7 @@ class GuidanceSession:
             if goal_status and goal_status.complete and goal_status.confidence > 0.7:
                 self.completed_steps.append(self.current_instruction or "Previous step")
                 self._send_message(f"🎉 {goal_status.reason}")
+                self._wait_for_user_ack("Done")
                 return "complete"
             
             if self.current_instruction:
@@ -443,6 +444,8 @@ Give them helpful troubleshooting advice or an alternative approach. Be encourag
             "result": False,
             "event": threading.Event(),
             "feedback": None,
+            "label": "Next",
+            "final": False,
         }
         
         # Request user input via GUI
@@ -454,6 +457,27 @@ Give them helpful troubleshooting advice or an alternative approach. Be encourag
                 if payload.get("cancelled"):
                     return None, False
                 return payload.get("feedback"), True
+            time.sleep(0.05)
+
+    def _wait_for_user_ack(self, label: str = "Done") -> None:
+        if not self.chat_window:
+            return
+
+        import threading
+
+        payload = {
+            "event": threading.Event(),
+            "feedback": None,
+            "label": label,
+            "final": True,
+        }
+
+        self.chat_window.request_guidance_input(payload)
+
+        while True:
+            self.stop_check()
+            if payload["event"].wait(0.2):
+                return
             time.sleep(0.05)
     
     def _send_message(self, message: str):
