@@ -175,6 +175,7 @@ def plan_task(
     task_context: Optional[str] = None,
     magnification_hint: Optional[str] = None,
     history: Optional[List] = None,
+    guidance_mode: bool = False,
     media_resolution: str = "low",
 ) -> Optional[tuple[Dict[str, Any], Any]]:
     """
@@ -216,6 +217,16 @@ def plan_task(
         mag_section = f"\n MAGNIFICATION NOTE: {magnification_hint}\n"
 
     turbo_status = "ENABLED" if Config.TURBO_MODE else "DISABLED"
+    guidance_section = ""
+    if guidance_mode:
+        guidance_section = """
+GUIDANCE MODE (HUMAN-FOLLOWING):
+- Prefer manual steps a human can do: open_app, press_key, key_combo, click, type_text.
+- Avoid call_skill unless no UI path exists.
+- Prefer clicks on OCR text elements that match the user's words (e.g., "Chrome", "Settings", "Search").
+- If a label is visible in OCR, choose that element_id instead of a generic control.
+- Do not output generic actions like "open system controls" when a specific OCR label exists.
+"""
 
     prompt_text = f"""
 You are an advanced AI OS Agent capable of planning and executing tasks using discrete actions or action sequences.
@@ -234,6 +245,8 @@ ATTACHMENTS:
 
 YOUR TASK:
 Analyze the user's command and current screen state. Return a JSON plan with the NEXT action(s) to take.
+
+{guidance_section}
 
 AVAILABLE SKILLS (HYBRID MODE):
 - The agent has "Skills" that use APIs instead of UI interaction. Use them PREFERENTIALLY for reliability.

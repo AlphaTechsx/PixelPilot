@@ -23,6 +23,7 @@ from tools.loop import LoopDetector
 from skills import MediaSkill, BrowserSkill, SystemSkill, TimerSkill
 from agent.verify import verify_task_completion
 from agent.brain import plan_task_blind
+from agent.guidance import create_guidance_session
 from pydantic import BaseModel, Field
 
 
@@ -908,10 +909,57 @@ class AgentOrchestrator:
 
         return success
 
+    def run_task_guidance(self, user_command: str) -> bool:
+        """
+        Interactive Guidance Mode: step-by-step tutorial with conversational interaction.
+        
+        The AI watches the screen and provides instructions while the user
+        performs actions themselves. Supports clarification questions mid-step.
+        """
+        self.log(f"\n{'=' * 60}")
+        self.log(f"GUIDANCE MODE: {user_command}")
+        self.log(f"{'=' * 60}")
+
+        if self.chat_window:
+            self.chat_window.set_click_through(False)
+
+        try:
+            self._stop_event.clear()
+            self.current_task = user_command
+            
+            # Create and run the guidance session
+            session = create_guidance_session(
+                user_goal=user_command,
+                chat_window=self.chat_window,
+                capture_func=self.capture_screen,
+                stop_check_func=self._check_stop,
+            )
+            
+            return session.run()
+            
+        except StopRequested:
+            self.log("Guidance session stopped by user")
+            return False
+            
+        except Exception as e:
+            self.log(f"Guidance session error: {e}")
+            return False
+            
+        finally:
+            if self.chat_window:
+                self.chat_window.set_click_through(False)
+
+    def _record_guidance_feedback(self, feedback: str) -> bool:
+        """Legacy method - kept for compatibility."""
+        return False
+
+
     def run_task(self, user_command: str) -> bool:
         """
         Execute a complete task with multi-step planning and execution.
         """
+        if self.mode == OperationMode.GUIDE:
+            return self.run_task_guidance(user_command)
         self.log(f"\n{'=' * 60}")
         self.log(f"NEW TASK: {user_command}")
         self.log(f"{'=' * 60}")

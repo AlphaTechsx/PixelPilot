@@ -39,6 +39,7 @@ class ChatWidget(QWidget):
         self.send_btn.clicked.connect(self.send_message)
         self.input_field.returnPressed.connect(self.send_message)
         self.mic_btn.clicked.connect(self.toggle_listening)
+        self.guidance_btn.clicked.connect(self._on_guidance_btn_clicked)
         self.mode_combo.currentIndexChanged.connect(self.update_mode_tooltip)
         self.mode_combo.currentIndexChanged.connect(self._emit_mode_changed)
         self.vision_combo.currentIndexChanged.connect(self.update_vision_tooltip)
@@ -51,6 +52,10 @@ class ChatWidget(QWidget):
         self._stream_target_id: str | None = None
         self._stream_full_text: str = ""
         self._stream_pos: int = 0
+        self._guidance_payload: dict | None = None
+        self._guidance_active: bool = False
+        self._guidance_input_active: bool = False  # New: for conversational guidance
+        self._guidance_input_payload: dict | None = None
         self.set_view_mode("full")
         self.update_mode_tooltip()
         self.update_vision_tooltip()
@@ -202,6 +207,27 @@ class ChatWidget(QWidget):
         self.input_hint.setWordWrap(True)
         layout.addWidget(self.input_hint)
 
+        self.guidance_bar = QFrame()
+        self.guidance_bar.setObjectName("guidanceBar")
+        g = QVBoxLayout(self.guidance_bar)
+        g.setContentsMargins(0, 0, 0, 0)
+        g.setSpacing(6)
+
+        self.guidance_btn = QPushButton("Next Step")
+        self.guidance_btn.setObjectName("guidanceBtn")
+        self.guidance_btn.setFixedSize(110, 32)
+        self.guidance_btn.setVisible(False)
+
+        button_row = QWidget()
+        b = QHBoxLayout(button_row)
+        b.setContentsMargins(0, 0, 0, 0)
+        b.setSpacing(0)
+        b.addStretch()
+        b.addWidget(self.guidance_btn)
+        g.addWidget(button_row)
+        self.guidance_bar.setVisible(False)
+        layout.addWidget(self.guidance_bar)
+
         self.input_frame = QFrame()
         self.input_frame.setObjectName("inputFrame")
         i = QHBoxLayout(self.input_frame)
@@ -216,7 +242,7 @@ class ChatWidget(QWidget):
         self.mic_btn.setObjectName("micBtn")
         self.mic_btn.setFixedSize(34, 34)
         self.mic_btn.setToolTip("Start listening")
-        
+
         self.send_btn = QPushButton("→")
         self.send_btn.setObjectName("sendBtn")
         self.send_btn.setFixedSize(28, 28)
@@ -272,6 +298,7 @@ class ChatWidget(QWidget):
             QPushButton#closeBtn:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #220909, stop:1 #300810); border-color: #b91c1c; }
             QTextEdit#chatDisplay { background: rgba(20, 34, 50, 170); color: #d4d4d4; border: none; font: 15px 'Segoe UI', 'Inter', sans-serif; padding: 8px; }
             QLabel#inputHint { color: #8fb7d6; font: 12px 'Segoe UI', 'Inter', sans-serif; padding: 2px 4px; }
+            QFrame#guidanceBar { background: transparent; }
             QWidget#voiceVisualizer { background: rgba(18, 32, 48, 165); border: 1px solid rgba(46, 72, 96, 170); border-radius: 10px; }
             QPushButton#compactStopBtn { background: rgba(12, 24, 36, 170); color: #bfe6ff; border: 1px solid rgba(52, 78, 102, 170); border-radius: 8px; font: 700 11px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.3px; padding: 4px 10px; }
             QPushButton#compactStopBtn:hover { background: rgba(14, 30, 46, 190); border-color: #057FCA; color: #e9f6ff; }
@@ -289,6 +316,16 @@ class ChatWidget(QWidget):
             QPushButton#micBtn:pressed { background: qradialgradient(cx:0.4, cy:0.4, radius:1.1, stop:0 #0a2f45, stop:1 #081a26); }
             QPushButton#sendBtn { background: #057FCA; color: #0d0d0d; border: none; border-radius: 4px; font: 700 14px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.2px; }
             QPushButton#sendBtn:hover { background: #059669; }
+            QPushButton#guidanceBtn {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #057FCA, stop:1 #0369A1);
+                color: #ffffff;
+                border: 2px solid #38BDF8;
+                border-radius: 8px;
+                font: 700 13px 'Segoe UI', 'Inter', sans-serif;
+                padding: 4px 12px;
+            }
+            QPushButton#guidanceBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0284C7, stop:1 #0EA5E9); border-color: #7DD3FC; }
+            QPushButton#guidanceBtn:pressed { background: #0369A1; border-color: #0284C7; }
         """)
 
     def _on_anchor_clicked(self, url: QUrl):
@@ -300,6 +337,7 @@ class ChatWidget(QWidget):
                     msg["expanded"] = not bool(msg.get("expanded"))
                     break
             self._render_chat()
+            return
 
     def _start_turn(self):
         self._turn_active = True
@@ -663,13 +701,30 @@ class ChatWidget(QWidget):
             self._start_turn()
             self.add_user_message(text)
             self.input_field.clear()
+            # Reset placeholder if it was changed for guidance
+            if self._guidance_input_active or self._guidance_active:
+                self.input_field.setPlaceholderText("> Type a command...")
+            # Check for new conversational guidance input first
+            if self._send_guidance_input(text):
+                return
+            # Check for legacy guidance feedback
+            if self._send_guidance_feedback(text):
+                return
             self.send_to_agent(text)
 
     def _append_message(self, *, kind: str, text: str):
         # Backwards-compat: this method now appends to an internal model then re-renders.
         self._append_to_model(kind=kind, text=text)
 
-    def _insert_bubble(self, cursor: QTextCursor, *, kind: str, text: str):
+    def _insert_bubble(
+        self,
+        cursor: QTextCursor,
+        *,
+        kind: str,
+        text: str,
+        actions: list[dict] | None = None,
+        completed: bool = False,
+    ):
         kind_key = (kind or "").lower().strip()
 
         viewport_width = max(300, self.chat_display.viewport().width())
@@ -730,8 +785,18 @@ class ChatWidget(QWidget):
         if italic:
             char_format.setFontItalic(True)
 
+        if completed and kind_key == "assistant":
+            text_color = QColor("#9fb9cc")
+            bubble_bg = QColor("#091521")
+            char_format.setForeground(text_color)
+            char_format.setBackground(bubble_bg)
+            display_text = f"✓ {text}"
+        else:
+            display_text = text
+
         cursor.insertBlock(block_format)
-        cursor.insertText(text, char_format)
+        cursor.insertText(display_text, char_format)
+
         cursor.insertBlock()
 
     def _render_thinking(self, cursor: QTextCursor, msg: dict):
@@ -811,7 +876,13 @@ class ChatWidget(QWidget):
                 text = msg.get("text")
                 if text is None:
                     continue
-                self._insert_bubble(cursor, kind=kind, text=str(text))
+                self._insert_bubble(
+                    cursor,
+                    kind=kind,
+                    text=str(text),
+                    actions=msg.get("actions"),
+                    completed=bool(msg.get("completed")),
+                )
             self.chat_display.setTextCursor(cursor)
             self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
         finally:
@@ -847,7 +918,54 @@ class ChatWidget(QWidget):
         self._hide_input_hint()
         self._start_turn()
         self.add_user_message(text)
+        # Check for new conversational guidance input first
+        if self._send_guidance_input(text):
+            return
+        # Check for legacy guidance feedback
+        if self._send_guidance_feedback(text):
+            return
         self.send_to_agent(text)
+
+    def _send_guidance_input(self, text: str) -> bool:
+        """Handle input for conversational guidance mode."""
+        if not self._guidance_input_active:
+            return False
+        if not isinstance(self._guidance_input_payload, dict):
+            return False
+
+        payload = self._guidance_input_payload
+        self._guidance_input_payload = None
+        self._guidance_input_active = False
+
+        payload["feedback"] = text
+        event = payload.get("event")
+        if event is not None:
+            event.set()
+
+        return True
+
+    def _send_guidance_feedback(self, text: str) -> bool:
+        """Handle legacy guidance button feedback."""
+        if not self._guidance_active:
+            return False
+        if not isinstance(self._guidance_payload, dict):
+            return False
+
+        payload = self._guidance_payload
+        self._guidance_payload = None
+        self._guidance_active = False
+        self._update_guidance_steps(None)
+        self.guidance_bar.hide()
+        self.guidance_btn.hide()
+
+        payload["result"] = False
+        payload["feedback"] = text
+        event = payload.get("event")
+        if event is not None:
+            event.set()
+
+        self._apply_view_mode()
+        return True
 
     def on_audio_level(self, level):
         self.voice_visualizer.set_level(level)
@@ -969,6 +1087,8 @@ class ChatWidget(QWidget):
             self.voice_visualizer.hide()
             self.voice_visualizer.set_active(False)
             self.compact_stop_btn.hide()
+            self.guidance_bar.hide()
+            self.guidance_btn.hide()
             if self.header.layout():
                 self.header.layout().invalidate()
                 self.header.layout().activate()
@@ -983,6 +1103,8 @@ class ChatWidget(QWidget):
                 self.voice_visualizer.show()
                 self.voice_visualizer.set_active(True)
                 self.compact_stop_btn.show()
+                self.guidance_bar.hide()
+                self.guidance_btn.hide()
             else:
                 self.chat_display.show()
                 self.input_frame.show()
@@ -990,6 +1112,12 @@ class ChatWidget(QWidget):
                     self.input_hint.hide()
                 else:
                     self.input_hint.show()
+                if self._guidance_active or self._guidance_input_active:
+                    self.guidance_bar.show()
+                    self.guidance_btn.show()
+                else:
+                    self.guidance_bar.hide()
+                    self.guidance_btn.hide()
                 self.voice_visualizer.hide()
                 self.voice_visualizer.set_active(False)
                 self.compact_stop_btn.hide()
@@ -1004,6 +1132,12 @@ class ChatWidget(QWidget):
             self.input_hint.show()
         self.dropdowns.show()
         self.compact_stop_btn.hide()
+        if self._guidance_active or self._guidance_input_active:
+            self.guidance_bar.show()
+            self.guidance_btn.show()
+        else:
+            self.guidance_bar.hide()
+            self.guidance_btn.hide()
         if listening:
             self.voice_visualizer.show()
             self.voice_visualizer.set_active(True)
@@ -1018,3 +1152,82 @@ class ChatWidget(QWidget):
     def _hide_input_hint(self):
         if self.input_hint.isVisible():
             self.input_hint.hide()
+
+    def _mark_last_guidance_step_completed(self):
+        for msg in reversed(self._chat_model):
+            if (msg.get("kind") or "").lower().strip() != "assistant":
+                continue
+            if msg.get("completed"):
+                return
+            msg["completed"] = True
+            self._render_chat()
+            return
+
+    def show_guidance_button(self, label: str, payload: dict):
+        text = (label or "Next").strip() or "Next"
+        self._guidance_payload = payload
+        self._guidance_active = True
+        self.guidance_btn.setText(text)
+        self.guidance_btn.setEnabled(True)
+        self.guidance_bar.show()
+        self.guidance_btn.show()
+        self._apply_view_mode()
+
+    def hide_guidance_button(self):
+        self._guidance_payload = None
+        self._guidance_active = False
+        self.guidance_bar.hide()
+        self.guidance_btn.hide()
+        self._apply_view_mode()
+
+    def show_guidance_input(self, payload: dict):
+        """Enable conversational guidance input mode.
+        
+        The next message from the user will be sent to the guidance session
+        instead of starting a new agent task. Also shows a "Next" button.
+        """
+        self._guidance_input_payload = payload
+        self._guidance_input_active = True
+        label = (payload.get("label") or "Next").strip() or "Next"
+        if payload.get("final"):
+            self.input_field.setPlaceholderText("> Click Done to finish or type a reply...")
+        else:
+            self.input_field.setPlaceholderText("> Type 'done', ask a question, or describe what happened...")
+        self.guidance_btn.setText(label)
+        self.guidance_btn.setEnabled(True)
+        self.guidance_bar.show()
+        self.guidance_btn.show()
+        self._apply_view_mode()
+
+    def _on_guidance_btn_clicked(self):
+        # Handle new conversational guidance input mode
+        if self._guidance_input_active and isinstance(self._guidance_input_payload, dict):
+            payload = self._guidance_input_payload
+            self._guidance_input_payload = None
+            self._guidance_input_active = False
+            self._mark_last_guidance_step_completed()
+            self.guidance_bar.hide()
+            self.guidance_btn.hide()
+            self.input_field.setPlaceholderText("> Type a command...")
+            # Set "done" as the default input when clicking Next
+            self._start_turn()
+            self.add_activity_message("Planning next step...")
+            payload["feedback"] = "done"
+            if payload.get("event"):
+                payload["event"].set()
+            return
+            
+        # Handle legacy guidance button mode
+        payload = self._guidance_payload
+        self._guidance_payload = None
+        self._guidance_active = False
+        self._mark_last_guidance_step_completed()
+        self.guidance_bar.hide()
+        self.guidance_btn.hide()
+        if isinstance(payload, dict):
+            self._start_turn()
+            self.add_activity_message("Planning next step...")
+            payload["result"] = True
+            payload["event"].set()
+
+
