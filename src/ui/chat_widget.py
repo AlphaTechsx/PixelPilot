@@ -209,16 +209,22 @@ class ChatWidget(QWidget):
 
         self.guidance_bar = QFrame()
         self.guidance_bar.setObjectName("guidanceBar")
-        g = QHBoxLayout(self.guidance_bar)
+        g = QVBoxLayout(self.guidance_bar)
         g.setContentsMargins(0, 0, 0, 0)
-        g.setSpacing(0)
-        g.addStretch()
+        g.setSpacing(6)
 
         self.guidance_btn = QPushButton("Next Step")
         self.guidance_btn.setObjectName("guidanceBtn")
         self.guidance_btn.setFixedSize(110, 32)
         self.guidance_btn.setVisible(False)
-        g.addWidget(self.guidance_btn)
+
+        button_row = QWidget()
+        b = QHBoxLayout(button_row)
+        b.setContentsMargins(0, 0, 0, 0)
+        b.setSpacing(0)
+        b.addStretch()
+        b.addWidget(self.guidance_btn)
+        g.addWidget(button_row)
         self.guidance_bar.setVisible(False)
         layout.addWidget(self.guidance_bar)
 
@@ -710,7 +716,15 @@ class ChatWidget(QWidget):
         # Backwards-compat: this method now appends to an internal model then re-renders.
         self._append_to_model(kind=kind, text=text)
 
-    def _insert_bubble(self, cursor: QTextCursor, *, kind: str, text: str, actions: list[dict] | None = None):
+    def _insert_bubble(
+        self,
+        cursor: QTextCursor,
+        *,
+        kind: str,
+        text: str,
+        actions: list[dict] | None = None,
+        completed: bool = False,
+    ):
         kind_key = (kind or "").lower().strip()
 
         viewport_width = max(300, self.chat_display.viewport().width())
@@ -771,8 +785,17 @@ class ChatWidget(QWidget):
         if italic:
             char_format.setFontItalic(True)
 
+        if completed and kind_key == "assistant":
+            text_color = QColor("#9fb9cc")
+            bubble_bg = QColor("#091521")
+            char_format.setForeground(text_color)
+            char_format.setBackground(bubble_bg)
+            display_text = f"✓ {text}"
+        else:
+            display_text = text
+
         cursor.insertBlock(block_format)
-        cursor.insertText(text, char_format)
+        cursor.insertText(display_text, char_format)
 
         cursor.insertBlock()
 
@@ -853,7 +876,13 @@ class ChatWidget(QWidget):
                 text = msg.get("text")
                 if text is None:
                     continue
-                self._insert_bubble(cursor, kind=kind, text=str(text), actions=msg.get("actions"))
+                self._insert_bubble(
+                    cursor,
+                    kind=kind,
+                    text=str(text),
+                    actions=msg.get("actions"),
+                    completed=bool(msg.get("completed")),
+                )
             self.chat_display.setTextCursor(cursor)
             self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
         finally:
@@ -925,6 +954,7 @@ class ChatWidget(QWidget):
         payload = self._guidance_payload
         self._guidance_payload = None
         self._guidance_active = False
+        self._update_guidance_steps(None)
         self.guidance_bar.hide()
         self.guidance_btn.hide()
 
@@ -1123,6 +1153,16 @@ class ChatWidget(QWidget):
         if self.input_hint.isVisible():
             self.input_hint.hide()
 
+    def _mark_last_guidance_step_completed(self):
+        for msg in reversed(self._chat_model):
+            if (msg.get("kind") or "").lower().strip() != "assistant":
+                continue
+            if msg.get("completed"):
+                return
+            msg["completed"] = True
+            self._render_chat()
+            return
+
     def show_guidance_button(self, label: str, payload: dict):
         text = (label or "Next").strip() or "Next"
         self._guidance_payload = payload
@@ -1165,10 +1205,13 @@ class ChatWidget(QWidget):
             payload = self._guidance_input_payload
             self._guidance_input_payload = None
             self._guidance_input_active = False
+            self._mark_last_guidance_step_completed()
             self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.input_field.setPlaceholderText("> Type a command...")
             # Set "done" as the default input when clicking Next
+            self._start_turn()
+            self.add_activity_message("Planning next step...")
             payload["feedback"] = "done"
             if payload.get("event"):
                 payload["event"].set()
@@ -1178,9 +1221,12 @@ class ChatWidget(QWidget):
         payload = self._guidance_payload
         self._guidance_payload = None
         self._guidance_active = False
+        self._mark_last_guidance_step_completed()
         self.guidance_bar.hide()
         self.guidance_btn.hide()
         if isinstance(payload, dict):
+            self._start_turn()
+            self.add_activity_message("Planning next step...")
             payload["result"] = True
             payload["event"].set()
 

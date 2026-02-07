@@ -446,6 +446,10 @@ Give them helpful troubleshooting advice or an alternative approach. Be encourag
             "feedback": None,
             "label": "Next",
             "final": False,
+            "steps": {
+                "done": list(self.completed_steps),
+                "current": self.current_instruction,
+            },
         }
         
         # Request user input via GUI
@@ -470,6 +474,10 @@ Give them helpful troubleshooting advice or an alternative approach. Be encourag
             "feedback": None,
             "label": label,
             "final": True,
+            "steps": {
+                "done": list(self.completed_steps),
+                "current": None,
+            },
         }
 
         self.chat_window.request_guidance_input(payload)
