@@ -8,8 +8,8 @@ from config import Config
 
 
 class MainWindow(QMainWindow):
-    FULL_SIZE = (440, 480)
-    COMPACT_SIZE = (440, 240)
+    FULL_SIZE = (460, 480)
+    COMPACT_SIZE = (460, 240)
     MINI_SIZE = (160, 60)
     
     def __init__(self):

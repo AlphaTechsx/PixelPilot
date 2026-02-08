@@ -62,6 +62,7 @@ class ChatWidget(QWidget):
 
         # Default vision selection from Config
         self.set_vision_mode("ROBO" if Config.USE_ROBOTICS_EYE else "OCR")
+        self.set_workspace_status(Config.DEFAULT_WORKSPACE)
 
     def set_operation_mode(self, mode: OperationMode):
         """Update dropdown without re-triggering mode change logic."""
@@ -104,6 +105,21 @@ class ChatWidget(QWidget):
         finally:
             self.vision_combo.blockSignals(False)
         self.update_vision_tooltip()
+
+    def set_workspace_status(self, workspace: str):
+        key = (workspace or "").strip().lower()
+        if key not in {"user", "agent"}:
+            key = "user"
+
+        label = "USER" if key == "user" else "AGENT"
+        self.workspace_badge.setText(label)
+        self.workspace_badge.setProperty("workspace", key)
+        self.workspace_badge.setToolTip(
+            "Current workspace: User Desktop" if key == "user" else "Current workspace: Agent Desktop"
+        )
+
+        self.workspace_badge.style().unpolish(self.workspace_badge)
+        self.workspace_badge.style().polish(self.workspace_badge)
 
     def _emit_vision_changed(self):
         text = self.vision_combo.currentText().strip().upper()
@@ -152,6 +168,10 @@ class ChatWidget(QWidget):
         dd.setSpacing(10)
         dd.addWidget(self.mode_combo)
         dd.addWidget(self.vision_combo)
+
+        self.workspace_badge = QLabel("USER")
+        self.workspace_badge.setObjectName("workspaceBadge")
+        self.workspace_badge.setToolTip("Current workspace")
         
         self.minimize_btn = QPushButton("−")
         self.minimize_btn.setObjectName("minimizeBtn")
@@ -169,6 +189,7 @@ class ChatWidget(QWidget):
         
         h.addWidget(self.logo)
         h.addWidget(self.dropdowns)
+        h.addWidget(self.workspace_badge)
         h.addStretch()
         h.addWidget(self.minimize_btn)
         h.addWidget(self.expand_btn)
@@ -260,15 +281,37 @@ class ChatWidget(QWidget):
             ChatWidget { background: rgba(18, 30, 44, 190); border: 1px solid rgba(52, 78, 102, 170); border-radius: 10px; font-family: 'Segoe UI', 'Inter', sans-serif; }
             QFrame#header { background: transparent; }
             QLabel#logo { color: #057FCA; font: bold 14px 'Consolas'; letter-spacing: 2px; }
-            QComboBox#modeCombo { background: rgba(20, 36, 54, 180); color: #cfe9ff; border: 1px solid rgba(52, 78, 102, 180); border-radius: 8px; padding: 6px 12px; font: 600 12px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.4px; min-width: 104px; }
+            QComboBox#modeCombo { background: rgba(20, 36, 54, 180); color: #cfe9ff; border: 1px solid rgba(52, 78, 102, 180); border-radius: 8px; padding: 6px 12px; font: 600 12px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.4px; min-width: 90px; }
             QComboBox#modeCombo::drop-down { border: none; width: 16px; }
             QComboBox#modeCombo::down-arrow { image: none; }
             QComboBox#modeCombo:hover { border-color: #404040; }
-            QComboBox#visionCombo { background: rgba(20, 36, 54, 180); color: #cfe9ff; border: 1px solid rgba(52, 78, 102, 180); border-radius: 8px; padding: 6px 12px; font: 600 12px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.4px; min-width: 72px; }
+            QComboBox#visionCombo { background: rgba(20, 36, 54, 180); color: #cfe9ff; border: 1px solid rgba(52, 78, 102, 180); border-radius: 8px; padding: 6px 12px; font: 600 12px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.4px; min-width: 60px; }
             QComboBox#visionCombo::drop-down { border: none; width: 16px; }
             QComboBox#visionCombo::down-arrow { image: none; }
             QComboBox#visionCombo:hover { border-color: #404040; }
             QComboBox QAbstractItemView { background: rgba(20, 36, 54, 210); color: #e5f3ff; selection-background-color: rgba(36, 60, 86, 190); border: 1px solid rgba(52, 78, 102, 180); font: 500 11px 'Segoe UI', 'Inter', sans-serif; }
+            QLabel#workspaceBadge {
+                background: rgba(36, 40, 46, 180);
+                color: #e6f3ff;
+                border: 1px solid rgba(90, 112, 132, 180);
+                border-radius: 8px;
+                padding: 1px 1px;
+                font: 700 9px 'Segoe UI', 'Inter', sans-serif;
+                letter-spacing: 0.8px;
+                min-width: 34px;
+                max-height: 18px;
+                qproperty-alignment: 'AlignCenter';
+            }
+            QLabel#workspaceBadge[workspace="user"] {
+                background: rgba(40, 30, 14, 190);
+                color: #ffe6b5;
+                border: 1px solid rgba(160, 120, 60, 190);
+            }
+            QLabel#workspaceBadge[workspace="agent"] {
+                background: rgba(10, 32, 22, 190);
+                color: #baf7d0;
+                border: 1px solid rgba(60, 150, 110, 190);
+            }
             QPushButton#minimizeBtn, QPushButton#expandBtn {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b1f2a, stop:1 #0f2f43);
                 color: #bfe6ff;
@@ -1084,6 +1127,7 @@ class ChatWidget(QWidget):
             self.input_frame.hide()
             self.input_hint.hide()
             self.dropdowns.hide()
+            self.workspace_badge.hide()
             self.voice_visualizer.hide()
             self.voice_visualizer.set_active(False)
             self.compact_stop_btn.hide()
@@ -1096,6 +1140,7 @@ class ChatWidget(QWidget):
 
         if self.view_mode == "compact":
             self.dropdowns.show()
+            self.workspace_badge.show()
             if listening:
                 self.chat_display.hide()
                 self.input_frame.hide()
@@ -1131,6 +1176,7 @@ class ChatWidget(QWidget):
         else:
             self.input_hint.show()
         self.dropdowns.show()
+        self.workspace_badge.show()
         self.compact_stop_btn.hide()
         if self._guidance_active or self._guidance_input_active:
             self.guidance_bar.show()

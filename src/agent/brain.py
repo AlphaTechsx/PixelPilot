@@ -66,7 +66,10 @@ class ActionResponse(BaseModel):
 
 class SubAction(BaseModel):
     action_type: str = Field(
-        description="The type of action: click, type_text, press_key, key_combo, open_app, wait, magnify"
+        description=(
+            "The type of action: click, type_text, press_key, key_combo, open_app, wait, "
+            "magnify, switch_workspace"
+        )
     )
     params: Dict[str, Any] = Field(
         description="Parameters for the action. For 'click', MUST include 'element_id'. For 'type_text', MUST include 'text'."
@@ -176,6 +179,8 @@ def plan_task(
     magnification_hint: Optional[str] = None,
     history: Optional[List] = None,
     guidance_mode: bool = False,
+    current_workspace: str = "user",
+    agent_desktop_available: bool = False,
     media_resolution: str = "low",
 ) -> Optional[tuple[Dict[str, Any], Any]]:
     """
@@ -217,6 +222,10 @@ def plan_task(
         mag_section = f"\n MAGNIFICATION NOTE: {magnification_hint}\n"
 
     turbo_status = "ENABLED" if Config.TURBO_MODE else "DISABLED"
+    workspace_section = f"CURRENT WORKSPACE: {current_workspace}"
+    agent_desktop_section = (
+        "AGENT DESKTOP AVAILABLE: YES" if agent_desktop_available else "AGENT DESKTOP AVAILABLE: NO"
+    )
     guidance_section = ""
     if guidance_mode:
         guidance_section = """
@@ -235,6 +244,8 @@ TURBO MODE STATUS: {turbo_status}
 
 USER COMMAND: "{user_command}"
 {context_section}{mag_section}
+{workspace_section}
+{agent_desktop_section}
 SCREEN ELEMENTS DETECTED (OCR + Visual):
 {elements_str}
 
@@ -245,6 +256,19 @@ ATTACHMENTS:
 
 YOUR TASK:
 Analyze the user's command and current screen state. Return a JSON plan with the NEXT action(s) to take.
+
+COORDINATION RULES:
+- You are the VISION agent. A BLIND agent exists and can take over when visual context is not needed.
+- To hand off to the BLIND agent, set `needs_vision: false`.
+- To request VISION (you), the BLIND agent will set `needs_vision: true`.
+- You and the BLIND agent must stay aware of the CURRENT WORKSPACE and can switch when needed.
+
+WORKSPACE RULES:
+- Workspaces: "user" (user's live desktop) and "agent" (isolated Agent Desktop).
+- Default to the agent desktop when the task does NOT require the user's live desktop and the user did not explicitly request the user desktop.
+- Examples that usually belong on the agent desktop: CLI checks (e.g., verifying winget), downloads, background installs, browsing, and long-running tasks.
+- Use the user desktop for tasks tied to the user's active apps, or when they need to see or interact with the result directly.
+- Switch using action `switch_workspace` with params {{"workspace": "user"|"agent"}}.
 
 {guidance_section}
 
@@ -280,6 +304,7 @@ AVAILABLE ACTIONS:
 - magnify: Zoom in on a specific area to see small icons/text. Params: {{"element_id": <int>, "zoom_level": 2.0}}
 - reply: Just answer the user's question directly. Params: {{"text": "<string>"}}
 - call_skill: Execute a skill function. Params: {{"skill": "media", "method": "play", "args": {{"query": "..."}}}}
+- switch_workspace: Switch between desktops. Params: {{"workspace": "user"|"agent"}}
 
 TURBO MODE RULES:
 - If {turbo_status} == ENABLED, you SHOULD combine multiple stable steps into 'action_sequence'.
@@ -360,6 +385,8 @@ def plan_task_blind(
     user_command: str,
     task_context: Optional[str] = None,
     history: Optional[List] = None,
+    current_workspace: str = "user",
+    agent_desktop_available: bool = False,
 ) -> Optional[tuple[Dict[str, Any], Any]]:
     """
     Planning for 'Blind Mode' (No Vision).
@@ -372,16 +399,35 @@ def plan_task_blind(
         context_section = f"\nTASK CONTEXT (previous steps):\n{task_context}\n"
 
     turbo_status = "ENABLED" if Config.TURBO_MODE else "DISABLED"
+    workspace_section = f"CURRENT WORKSPACE: {current_workspace}"
+    agent_desktop_section = (
+        "AGENT DESKTOP AVAILABLE: YES" if agent_desktop_available else "AGENT DESKTOP AVAILABLE: NO"
+    )
 
     prompt_text = f"""
 You are a 'Blind' AI OS Agent. You can control the computer using keyboard shortcuts, system skills, and commands, BUT YOU CANNOT SEE THE SCREEN.
 
 USER COMMAND: "{user_command}"
 {context_section}
+{workspace_section}
+{agent_desktop_section}
 
 YOUR GOAL:
 Try to fulfill the user's request using ONLY the available blind tools.
 However, you must be extremely CAUTIOUS. "Blind Mode" is efficient but risky.
+
+COORDINATION RULES:
+- You are the BLIND agent. A VISION agent exists and can take over when visual context is needed.
+- To request VISION, set `needs_vision: true`.
+- If the task can proceed safely without vision, keep `needs_vision: false`.
+- You and the VISION agent must stay aware of the CURRENT WORKSPACE and can switch when needed.
+
+WORKSPACE RULES:
+- Workspaces: "user" (user's live desktop) and "agent" (isolated Agent Desktop).
+- Default to the agent desktop when the task does NOT require the user's live desktop and the user did not explicitly request the user desktop.
+- Examples that usually belong on the agent desktop: CLI checks (e.g., verifying winget), downloads, background installs, browsing, and long-running tasks.
+- Use the user desktop for tasks tied to the user's active apps, or when they need to see or interact with the result directly.
+- Switch using action `switch_workspace` with params {{"workspace": "user"|"agent"}}.
 
 CRITICAL "FEAR OF FAILURE" PROTOCOL:
 1. **Safety First**: If you are not 100% sure that the app is open, focused, and ready for input, REQUEST VISION (`needs_vision: true`). Do not assume state.
@@ -399,6 +445,7 @@ AVAILABLE BLIND ACTIONS:
 - search_web: Google search. Params: {{"query": "..."}}
 - reply: Answer user. Params: {{"text": "..."}}
 - call_skill: Use a skill (Media, Browser, System, Timer). Params: {{"skill": "...", "method": "...", "args": {{...}}}}
+- switch_workspace: Switch between desktops. Params: {{"workspace": "user"|"agent"}}
 
 UNAVAILABLE ACTIONS (Requires Vision):
 - click (You have no coordinates!)

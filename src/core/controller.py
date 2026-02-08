@@ -44,6 +44,7 @@ class MainController(QObject):
         self.gui_adapter.click_through_requested.connect(self.handle_click_through)
         self.gui_adapter.guidance_next_requested.connect(self.handle_guidance_next)
         self.gui_adapter.guidance_input_requested.connect(self.handle_guidance_input)
+        self.gui_adapter.workspace_changed.connect(self.handle_workspace_changed)
 
     def init_agent(self):
         try:
@@ -62,6 +63,14 @@ class MainController(QObject):
                 robotics_eye=robotics_eye,
             )
             self.gui_adapter.current_mode = self.agent.mode
+
+            try:
+                if self.main_window and hasattr(self.main_window, "chat_widget"):
+                    self.main_window.chat_widget.set_workspace_status(
+                        self.agent.active_workspace
+                    )
+            except Exception:
+                pass
             
             if self.desktop_manager:
                 self.agent.desktop_manager = self.desktop_manager
@@ -227,6 +236,27 @@ class MainController(QObject):
             self.gui_adapter.add_activity_message("Settings updated")
         except Exception as e:
             self.gui_adapter.add_error_message(f"Failed to change mode: {e}")
+
+    @Slot(str)
+    def handle_workspace_changed(self, workspace: str):
+        if not self.agent:
+            return
+
+        try:
+            if self.main_window and hasattr(self.main_window, "chat_widget"):
+                self.main_window.chat_widget.set_workspace_status(workspace)
+        except Exception:
+            pass
+
+        try:
+            if workspace == "user":
+                self.main_window.set_click_through_enabled(True)
+            else:
+                self.main_window.set_click_through_enabled(False)
+        except Exception:
+            pass
+
+        self.update_sidecar_visibility()
 
     @Slot(str)
     def handle_vision_changed(self, vision_mode: str):

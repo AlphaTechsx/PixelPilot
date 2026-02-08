@@ -103,6 +103,49 @@ class AgentOrchestrator:
         if self._stop_event.is_set():
             raise StopRequested()
 
+    def _set_workspace(self, target: str, reason: Optional[str] = None) -> None:
+        target = (target or "").strip().lower()
+        if target not in {"user", "agent"}:
+            return
+
+        if self.active_workspace == target:
+            return
+
+        self.active_workspace = target
+        if reason:
+            self.log(f"Workspace set to {target}: {reason}")
+        else:
+            self.log(f"Workspace set to {target}")
+
+        if self.chat_window:
+            try:
+                if hasattr(self.chat_window, "notify_workspace_changed"):
+                    self.chat_window.notify_workspace_changed(target)
+                if target == "user":
+                    self.chat_window.set_click_through(True)
+                else:
+                    self.chat_window.set_click_through(False)
+            except Exception:
+                pass
+
+    def _ensure_workspace_active(self) -> None:
+        if self.active_workspace != "agent":
+            return
+
+        if not self.desktop_manager or not self.desktop_manager.is_created:
+            self._set_workspace(
+                "user",
+                reason="Agent Desktop unavailable; continuing on user desktop",
+            )
+
+    def _restore_default_workspace(self, reason: str) -> None:
+        target = (Config.DEFAULT_WORKSPACE or "user").strip().lower()
+        if target not in {"user", "agent"}:
+            target = "user"
+
+        self._set_workspace(target, reason=reason)
+        self._ensure_workspace_active()
+
     def log(self, message: str):
         """Log message to file and (sparingly) to the GUI.
 
@@ -260,6 +303,8 @@ class AgentOrchestrator:
         Capture and analyze the current screen.
         Implements Lazy Vision: OCR first, fallback to Robotics if ambiguous.
         """
+        self._ensure_workspace_active()
+
         if self.chat_window and self.active_workspace == "user":
             self.chat_window.prepare_for_screenshot()
 
@@ -514,6 +559,8 @@ class AgentOrchestrator:
                 return self._execute_reply(params)
             elif action_type == "call_skill":
                 return self._execute_skill(params)
+            elif action_type == "switch_workspace":
+                return self._execute_switch_workspace(params)
             elif action_type == "sequence":
                 print(
                     "   [WARNING] 'sequence' type passed to execute_action. This should be handled in run_task."
@@ -774,6 +821,28 @@ class AgentOrchestrator:
         print(f"   [REPLY]: {text}")
         return True
 
+    def _execute_switch_workspace(self, params: Dict) -> bool:
+        target = (params.get("workspace") or "").strip().lower()
+        if target not in {"user", "agent"}:
+            print(f"Invalid workspace target: {target}")
+            return False
+
+        if target == "agent":
+            if not self.desktop_manager or not self.desktop_manager.is_created:
+                self._set_workspace(
+                    "user",
+                    reason="Agent Desktop unavailable; continuing on user desktop",
+                )
+                return False
+
+        if self.active_workspace == target:
+            print(f"Already on workspace: {target}")
+            return True
+
+        self._set_workspace(target)
+
+        return True
+
     def _process_action_result(
         self, action: Dict[str, Any], elements: List[Dict], user_command: str
     ) -> bool:
@@ -968,6 +1037,7 @@ class AgentOrchestrator:
         finally:
             if self.chat_window:
                 self.chat_window.set_click_through(False)
+            self._restore_default_workspace("Guidance task finished")
 
     def _record_guidance_feedback(self, feedback: str) -> bool:
         """Legacy method - kept for compatibility."""
@@ -1011,6 +1081,8 @@ class AgentOrchestrator:
                 self.step_count += 1
                 self.log(f"\n--- Step {self.step_count}/{self.max_steps} ---")
 
+                self._ensure_workspace_active()
+
                 if not vision_active:
                     self.log("Planning action (Blind Mode)...")
 
@@ -1031,7 +1103,13 @@ class AgentOrchestrator:
                         if self.task_history
                         else ""
                     )
-                    plan_result = plan_task_blind(user_command, task_ctx, self.model_history)
+                    plan_result = plan_task_blind(
+                        user_command,
+                        task_ctx,
+                        self.model_history,
+                        current_workspace=self.active_workspace,
+                        agent_desktop_available=bool(self.desktop_manager and self.desktop_manager.is_created),
+                    )
 
                     if plan_result:
                         action, model_response = plan_result
@@ -1141,6 +1219,8 @@ class AgentOrchestrator:
                     task_context,
                     mag_hint,
                     self.model_history,
+                    current_workspace=self.active_workspace,
+                    agent_desktop_available=bool(self.desktop_manager and self.desktop_manager.is_created),
                     media_resolution=media_res,
                 )
 
@@ -1233,6 +1313,7 @@ class AgentOrchestrator:
         finally:
             if self.chat_window and self.active_workspace == "user":
                 self.chat_window.set_click_through(False)
+            self._restore_default_workspace("Task finished")
 
     def _check_and_trigger_uac(self):
         """Check if we are locked out by UAC and trigger the orchestrator."""
