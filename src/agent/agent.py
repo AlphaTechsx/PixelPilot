@@ -542,6 +542,9 @@ class AgentOrchestrator:
         print(f"\n Action: {action_type}")
         print(f"Reasoning: {action['reasoning']}")
 
+        if action_type == "reply":
+            return self._execute_reply(params)
+
         if Config.should_ask_confirmation(self.mode, action["reasoning"]):
             if self.mode == OperationMode.GUIDE:
                 print(f"[GUIDE MODE] Suggestion: {action_type} with {params}")
@@ -839,7 +842,16 @@ class AgentOrchestrator:
 
     def _execute_reply(self, params: Dict) -> bool:
         """Reply to the user's question without taking action on screen."""
-        text = params.get("text", "")
+        text = params.get("text") or params.get("message") or params.get("content") or ""
+        if self.chat_window:
+            add_final = getattr(self.chat_window, "add_final_answer", None)
+            if callable(add_final):
+                add_final(text)
+            else:
+                try:
+                    self.chat_window.add_system_message(text)
+                except Exception:
+                    pass
         print(f"   [REPLY]: {text}")
         return True
 
@@ -1075,6 +1087,13 @@ class AgentOrchestrator:
         self.log(f"\n{'=' * 60}")
         self.log(f"NEW TASK: {user_command}")
         self.log(f"{'=' * 60}")
+
+        self._restore_default_workspace("Task start")
+        if self.chat_window and hasattr(self.chat_window, "notify_workspace_changed"):
+            try:
+                self.chat_window.notify_workspace_changed(self.active_workspace)
+            except Exception:
+                pass
 
         if self.chat_window and self.active_workspace == "user":
             self.chat_window.set_click_through(True)

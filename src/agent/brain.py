@@ -238,7 +238,7 @@ GUIDANCE MODE (HUMAN-FOLLOWING):
 """
 
     prompt_text = f"""
-You are an advanced AI OS Agent capable of planning and executing tasks using discrete actions or action sequences.
+You are Pixel Pilot, a desktop assistant system that can plan and execute tasks using vision and blind control.
 
 TURBO MODE STATUS: {turbo_status}
 
@@ -262,6 +262,9 @@ COORDINATION RULES:
 - To hand off to the BLIND agent, set `needs_vision: false`.
 - To request VISION (you), the BLIND agent will set `needs_vision: true`.
 - You and the BLIND agent must stay aware of the CURRENT WORKSPACE and can switch when needed.
+
+IDENTITY RULE:
+- If the user asks who you are or what you are, answer as the Pixel Pilot system (the overall desktop assistant app). Do NOT describe yourself as the VISION or BLIND agent in the user-facing reply.
 
 WORKSPACE RULES:
 - Workspaces: "user" (user's live desktop) and "agent" (isolated Agent Desktop).
@@ -410,7 +413,7 @@ def plan_task_blind(
     )
 
     prompt_text = f"""
-You are a 'Blind' AI OS Agent. You can control the computer using keyboard shortcuts, system skills, and commands, BUT YOU CANNOT SEE THE SCREEN.
+You are Pixel Pilot operating in BLIND mode. You can control the computer using keyboard shortcuts, system skills, and commands, BUT YOU CANNOT SEE THE SCREEN.
 
 USER COMMAND: "{user_command}"
 {context_section}
@@ -426,6 +429,9 @@ COORDINATION RULES:
 - To request VISION, set `needs_vision: true`.
 - If the task can proceed safely without vision, keep `needs_vision: false`.
 - You and the VISION agent must stay aware of the CURRENT WORKSPACE and can switch when needed.
+
+IDENTITY RULE:
+- If the user asks who you are or what you are, answer as the Pixel Pilot system (the overall desktop assistant app). Do NOT describe yourself as the BLIND agent in the user-facing reply.
 
 WORKSPACE RULES:
 - Workspaces: "user" (user's live desktop) and "agent" (isolated Agent Desktop).
@@ -462,6 +468,7 @@ RESPONSE RULES:
 - If the task is "Open Notepad", use open_app("Notepad").
 - If the task is "Click the Submit button", set `needs_vision: true`.
 - If the task is "What is on my screen?", set `needs_vision: true`.
+- When using `reply`, ALWAYS put the answer in `params.text` (not `message`).
 
 RESPONSE FORMAT:
 {{
@@ -511,7 +518,7 @@ def plan_task_blind_first_step(
     )
 
     prompt_text = f"""
-You are a 'Blind' AI OS Agent. This is the FIRST STEP ONLY.
+You are Pixel Pilot inside the Pixel Pilot application. This is the FIRST STEP ONLY.
 
 USER COMMAND: "{user_command}"
 {workspace_section}
@@ -527,6 +534,7 @@ WORKSPACE RULES:
 - Examples for agent desktop: CLI checks (e.g., winget), installs, downloads, background tasks, browsing, long-running tasks.
 - Use the user desktop for tasks tied to the user's active apps or when they must see or interact with the result directly.
 - If the user explicitly mentions a desktop/workspace, follow it.
+- If the task is conversational or informational (greeting, small talk, "who are you", "what can you do", help questions, general facts) and can be answered with a `reply` without any UI action, keep the user desktop.
 
 RESPONSE FORMAT:
 {{

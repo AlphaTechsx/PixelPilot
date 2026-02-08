@@ -121,8 +121,8 @@ class MainWindow(QMainWindow):
         """Show sidecar when main window is shown."""
         super().showEvent(event)
         if self.sidecar:
-            self.sidecar.show()
-            self.sidecar.reattach()
+            if self.sidecar.isVisible():
+                self.sidecar.reattach()
 
     def hideEvent(self, event):
         """Hide sidecar when main window is hidden."""
