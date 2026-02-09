@@ -4,42 +4,38 @@
 
 **Pilot Your Pixels.**
 
-PixelPilot is a Windows desktop automation agent powered by **Gemini (Google GenAI SDK)** plus computer vision. It turns natural language commands into real mouse and keyboard actions, mixes in native OS skills where possible, and can bridge Secure Desktop (UAC) prompts with an optional helper service.
+PixelPilot is a high-performance Windows desktop automation agent powered by **Gemini (Google GenAI SDK)** and advanced computer vision. It transforms natural language commands into precise mouse and keyboard actions, orchestrating a hybrid pipeline of vision-based and blind control across multiple isolated desktop workspaces.
 
-## Features
+## Architecture
 
-### Multimodal Planning and Vision
-- **Gemini planning model**: Uses `GEMINI_MODEL` (default `gemini-3-flash-preview`).
-- **Two vision modes** (switch in UI):
-    - **ROBO (default)**: Gemini Robotics-ER for semantic UI understanding (optionally uses bounding boxes).
-    - **OCR**: Local EasyOCR + OpenCV (OCR + edge based detection).
-- **Lazy vision fallback**: If Robotics is unavailable or ambiguous, it falls back to OCR.
-- **Magnification**: Zoom into dense UI regions before selecting an element.
-- **Reference sheets**: Optional grid of cropped UI elements to help with small icons.
+![High-Level Design View](src/logos/System-Architecture.png)
 
-### Operation Modes
-- **GUIDANCE**: Interactive, step-by-step tutorial mode. You do the actions while PixelPilot watches and helps.
-- **SAFE**: Confirms every action.
-- **AUTO**: Runs autonomously with extra caution on risky actions.
-- **Blind mode**: When vision is not needed, PixelPilot can plan and act without screenshots and switch back to vision when required.
+> [View Detailed Architecture Diagram](src/logos/System-Architecture_Detailed.png)
 
-### Agent Desktop and Sidecar
-- **Agent Desktop**: Optional isolated desktop workspace for safer background tasks.
-- **Sidecar preview**: Live, read-only preview of the Agent Desktop attached to the main window.
-- **Workspace switching**: The agent can switch between the user desktop and agent desktop.
+## Key Features
 
-### UAC / Secure Desktop Integration (Optional)
-- **UAC Orchestrator**: Scheduled task runs a SYSTEM service on startup.
-- **Trigger files**:
-    - `%SystemRoot%\Temp\uac_trigger.txt` signals the orchestrator.
-    - `%SystemRoot%\Temp\uac_snapshot.bmp` contains a Secure Desktop snapshot.
-    - `%SystemRoot%\Temp\uac_response.txt` receives `ALLOW` or `DENY`.
+### 🚀 Hybrid Planning & Execution
+- **Turbo Mode (Enabled by Default)**: Optimizes planning by batching multiple stable actions into a single execution sequence.
+- **Blind Mode**: The agent can plan and act without screenshots (using OS skills and hotkeys) when visual context is not required, automatically switching back to vision when needed.
+
+### 👁️ Advanced Vision System
+- **Lazy Vision Pipeline**: Implements a tiered approach—tries lightweight local OCR (EasyOCR + OpenCV) (default) first and **Gemini Robotics-ER** for complex semantic understanding or unknown icons.
+- **Incremental Screenshots**: Only captures and analyzes new screenshots when the screen state has changed, significantly reducing API latency.
+- **Dynamic Resolution**: Automatically requests high-resolution media from the brain when magnification is active or confidence is low.
+- **Magnification & Reference Sheets**: Zoom into dense UI regions and use visual coordinate reference sheets to solve small-element ambiguity.
+
+### 🖥️ Desktop Orchestration
+- **Agent Desktop (Isolated Workspaces)**: Create and switch between the live `user` desktop and an isolated `agent` desktop for background tasks.
+- **Sidecar Preview**: A high-performance, read-only live preview (supporting up to 30 FPS) of the Agent Desktop attached to the main UI.
+
+### 🛡️ System Integration & Security
+- **UAC / Secure Desktop Support**: A dedicated SYSTEM service (UAC Orchestrator) allows the agent to see and interact with Secure Desktop prompts.
+- **Loop Detection & Reflexion**: Detects repeated actions using perceptual hashing and uses "reflexion" logic to suggest alternatives or ask for clarification.
+- **Task Verification**: Performs optional post-task screen analysis to confirm the user's goal was actually achieved.
 
 ### Skills and Tooling
 - **Media / Browser / System / Timer skills**: Uses OS APIs where possible instead of UI driving.
 - **Smart App Indexer**: Uses Start Menu shortcuts, running processes, and registry to find apps.
-- **Loop detection**: Detects repeated actions with perceptual hashing and suggests alternatives.
-- **Task verification**: Optional screen verification to confirm completion.
 - **Voice input**: Mic button uses SpeechRecognition with an audio level visualizer.
 - **Global hotkeys**: System-wide hotkeys work even when the overlay is click-through.
 
@@ -190,4 +186,4 @@ MIT
 
 ---
 
-**Made with Gemini + computer vision.**
+**Made with Gemini + Advanced Computer Vision.**
