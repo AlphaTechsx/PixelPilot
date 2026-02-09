@@ -1,21 +1,13 @@
 import keyboard
 import ctypes
-import os
 
 
 class SystemSkill:
-    """
-    Controls system functions like Volume, Power, and Window Management using native calls.
-    """
-
     def __init__(self):
         self.enabled = True
         print("System Skill: Enabled (Volume, Power, Windows)")
 
     def set_volume(self, action):
-        """
-        Control volume. action: 'up', 'down', 'mute'
-        """
         try:
             if action == "up":
                 for _ in range(3):
@@ -47,14 +39,15 @@ class SystemSkill:
         except Exception as e:
             return f"Error minimizing: {e}"
 
-    def open_settings(self, page=None):
-        """
-        Open Windows Settings.
-        """
+    def open_settings(self, page=None, desktop_manager=None):
         try:
             uri = "ms-settings:"
             if page:
                 uri += page
+            if desktop_manager and desktop_manager.is_created:
+                success = desktop_manager.launch_process(f'cmd /c start "" "{uri}"')
+                return f"Opened Settings ({page or 'Home'})" if success else "Failed to open settings"
+            import os
             os.system(f"start {uri}")
             return f"Opened Settings ({page or 'Home'})"
         except Exception as e:

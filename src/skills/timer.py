@@ -2,30 +2,35 @@ import os
 
 
 class TimerSkill:
-    """
-    Interacts with Windows Alarms & Clock app via URI schemes.
-    """
-
     def __init__(self):
         self.enabled = True
         print("Timer Skill: Enabled (Windows Clock)")
 
-    def open_timer(self):
+    def open_timer(self, desktop_manager=None):
         try:
+            if desktop_manager and desktop_manager.is_created:
+                success = desktop_manager.launch_process("cmd /c start ms-clock:timer")
+                return "Opened Windows Clock (Timer tab)." if success else "Failed to open timer"
             os.system("start ms-clock:timer")
             return "Opened Windows Clock (Timer tab). Please set the time manually."
         except Exception as e:
             return f"Error opening timer: {e}"
 
-    def open_alarm(self):
+    def open_alarm(self, desktop_manager=None):
         try:
+            if desktop_manager and desktop_manager.is_created:
+                success = desktop_manager.launch_process("cmd /c start ms-clock:alarm")
+                return "Opened Windows Clock (Alarm tab)." if success else "Failed to open alarm"
             os.system("start ms-clock:alarm")
             return "Opened Windows Clock (Alarm tab)."
         except Exception as e:
             return f"Error opening alarm: {e}"
 
-    def open_stopwatch(self):
+    def open_stopwatch(self, desktop_manager=None):
         try:
+            if desktop_manager and desktop_manager.is_created:
+                success = desktop_manager.launch_process("cmd /c start ms-clock:stopwatch")
+                return "Opened Windows Clock (Stopwatch tab)." if success else "Failed to open stopwatch"
             os.system("start ms-clock:stopwatch")
             return "Opened Windows Clock (Stopwatch tab)."
         except Exception as e:

@@ -605,6 +605,8 @@ class AgentOrchestrator:
 
         print(f"Executing skill '{skill}' method '{method}'")
 
+        dm = self.desktop_manager if self.active_workspace == "agent" else None
+
         if skill == "media" or skill == "spotify":
             if not self.media_skill.enabled:
                 self.log("Media skill is disabled.")
@@ -630,9 +632,9 @@ class AgentOrchestrator:
                 return False
             result = "Unknown method"
             if method == "open":
-                result = self.browser_skill.open_url(args.get("url"))
+                result = self.browser_skill.open_url(args.get("url"), desktop_manager=dm)
             elif method == "search":
-                result = self.browser_skill.search(args.get("query"))
+                result = self.browser_skill.search(args.get("query"), desktop_manager=dm)
             self.log(f"Browser Skill Result: {result}")
             return True
 
@@ -647,7 +649,7 @@ class AgentOrchestrator:
             elif method == "minimize":
                 result = self.system_skill.minimize_all()
             elif method == "settings":
-                result = self.system_skill.open_settings(args.get("page"))
+                result = self.system_skill.open_settings(args.get("page"), desktop_manager=dm)
             self.log(f"System Skill Result: {result}")
             return True
 
@@ -656,11 +658,11 @@ class AgentOrchestrator:
                 return False
             result = "Unknown method"
             if method == "timer":
-                result = self.timer_skill.open_timer()
+                result = self.timer_skill.open_timer(desktop_manager=dm)
             elif method == "alarm":
-                result = self.timer_skill.open_alarm()
+                result = self.timer_skill.open_alarm(desktop_manager=dm)
             elif method == "stopwatch":
-                result = self.timer_skill.open_stopwatch()
+                result = self.timer_skill.open_stopwatch(desktop_manager=dm)
             self.log(f"Timer Skill Result: {result}")
             return True
 
