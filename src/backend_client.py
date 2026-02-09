@@ -7,6 +7,12 @@ from typing import List, Dict, Any, Optional
 from config import Config
 
 
+class RateLimitError(Exception):
+    """Raised when API rate limit is exceeded."""
+
+    pass
+
+
 class BackendClient:
     def __init__(self, base_url: Optional[str] = None):
         self.base_url = base_url or os.getenv("BACKEND_URL", "http://localhost:8000")
@@ -29,20 +35,36 @@ class BackendClient:
         }
 
         import time
+        from auth_manager import get_auth_manager
 
         max_retries = 5
         base_delay = 5  # seconds
+        auth = get_auth_manager()
 
         for attempt in range(max_retries):
             try:
-                response = requests.post(f"{self.base_url}/v1/generate", json=payload)
+                # Build headers with auth token
+                headers = {}
+                if auth.token:
+                    headers["Authorization"] = f"Bearer {auth.token}"
 
-                # If rate limited, wait and retry
+                response = requests.post(
+                    f"{self.base_url}/v1/generate",
+                    json=payload,
+                    headers=headers,
+                )
+
+                # Handle 401 Unauthorized
+                if response.status_code == 401:
+                    raise RuntimeError("Authentication required. Please login again.")
+
+                # Handle 429 Rate Limit - stop immediately
                 if response.status_code == 429:
-                    delay = base_delay * (2**attempt)  # 5, 10, 20, 40, 80
-                    print(f"Rate limited (429). Retrying in {delay}s...")
-                    time.sleep(delay)
-                    continue
+                    raise RateLimitError(
+                        "⚠️ Daily request limit reached!\n\n"
+                        "You have used all your requests for today. "
+                        "Limit resets at midnight UTC."
+                    )
 
                 response.raise_for_status()
                 return response.json()  # Expect {"text": "..."}

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, Field
 from config import Config
-from backend_client import BackendClient
+from backend_client import BackendClient, RateLimitError
 
 # client = genai.Client(api_key=api_key) -> Removed
 client = BackendClient()
@@ -225,6 +225,8 @@ def ask_brain(
             },
         )
         return ActionResponse.model_validate_json(response_data["text"]).model_dump()
+    except RateLimitError:
+        raise
     except Exception as e:
         print(f"Gemini Error: {e}")
         return None
@@ -451,6 +453,8 @@ CRITICAL GUIDELINES:
         )
 
         return action_dict, response_text
+    except RateLimitError:
+        raise
     except Exception as e:
         print(f"Error in plan_task: {e}")
         return None
@@ -567,6 +571,8 @@ RESPONSE FORMAT:
             exclude_none=True
         )
         return action_dict, response_text
+    except RateLimitError:
+        raise
     except Exception as e:
         print(f"Error in plan_task_blind: {e}")
         return None
@@ -638,6 +644,8 @@ RESPONSE FORMAT:
             exclude_none=True
         )
         return action_dict, response_text
+    except RateLimitError:
+        raise
     except Exception as e:
         print(f"Error in plan_task_blind_first_step: {e}")
         return None

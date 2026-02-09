@@ -103,28 +103,16 @@ async def generate_content(request: GenerationRequest):
     if tools_config:
         real_tools = []
         for t in tools_config:
-            # t is expected to be a dict like {"google_search": {}} or {"code_execution": {}}
             if "google_search" in t:
                 real_tools.append(types.Tool(google_search=types.GoogleSearch()))
             if "code_execution" in t:
                 real_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
 
-    # Construct config
-    # We pass the remaining config_data directly, assuming keys match GenerateContentConfig
-    # e.g. response_mime_type, response_schema (mapped from response_json_schema), temperature, etc.
-
-    # Map response_json_schema -> response_schema if needed by SDK,
-    # but google.genai V1 usually takes response_schema or response_mime_type="application/json"
-
-    # SDK v1 uses 'response_schema' usually, but let's check if we need to rename
-    # The SDK types.GenerateContentConfig has 'response_schema'.
-    # Map response_json_schema -> response_schema if needed by SDK
     if "response_json_schema" in config_data:
         schema = config_data.pop("response_json_schema")
         config_data["response_schema"] = _sanitize_schema(schema)
 
-    # Handle thinking_config
-    # expecting {"thinking_level": "high", "thinking_budget": 1024}
+
     thinking_conf = config_data.pop("thinking_config", None)
     real_thinking_config = None
     if thinking_conf:

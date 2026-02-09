@@ -4,3 +4,8 @@ python-dotenv
 google-genai
 pydantic
 Pillow
+pyjwt
+bcrypt
+motor
+redis
+pydantic[email]

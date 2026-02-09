@@ -22,6 +22,7 @@ from services.audio import AudioService
 from .voice_visualizer import VoiceVisualizer
 from config import OperationMode, Config
 
+
 class ChatWidget(QWidget):
     command_received = Signal(str)
     mode_changed = Signal(object)
@@ -115,7 +116,9 @@ class ChatWidget(QWidget):
         self.workspace_badge.setText(label)
         self.workspace_badge.setProperty("workspace", key)
         self.workspace_badge.setToolTip(
-            "Current workspace: User Desktop" if key == "user" else "Current workspace: Agent Desktop"
+            "Current workspace: User Desktop"
+            if key == "user"
+            else "Current workspace: Agent Desktop"
         )
 
         self.workspace_badge.style().unpolish(self.workspace_badge)
@@ -134,31 +137,51 @@ class ChatWidget(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
-        
+
         # Header
         self.header = QFrame()
         self.header.setObjectName("header")
         h = QHBoxLayout(self.header)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(12)
-        
-        logo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logos", "pixelpilot-icon.svg"))
+
+        logo_path = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__), "..", "logos", "pixelpilot-icon.svg"
+            )
+        )
         self.logo = QSvgWidget(logo_path)
         self.logo.setObjectName("logo")
         self.logo.setFixedSize(50, 50)
-        
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["GUIDANCE", "SAFE", "AUTO"])
         self.mode_combo.setObjectName("modeCombo")
-        self.mode_combo.setItemData(0, "Step-by-step guidance with continuous human input.", Qt.ItemDataRole.ToolTipRole)
-        self.mode_combo.setItemData(1, "Balanced autonomy. Confirms potentially dangerous actions.", Qt.ItemDataRole.ToolTipRole)
-        self.mode_combo.setItemData(2, "Minimal interaction. PIXIE runs tasks end-to-end.", Qt.ItemDataRole.ToolTipRole)
+        self.mode_combo.setItemData(
+            0,
+            "Step-by-step guidance with continuous human input.",
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.mode_combo.setItemData(
+            1,
+            "Balanced autonomy. Confirms potentially dangerous actions.",
+            Qt.ItemDataRole.ToolTipRole,
+        )
+        self.mode_combo.setItemData(
+            2,
+            "Minimal interaction. PIXIE runs tasks end-to-end.",
+            Qt.ItemDataRole.ToolTipRole,
+        )
 
         self.vision_combo = QComboBox()
         self.vision_combo.addItems(["ROBO", "OCR"])
         self.vision_combo.setObjectName("visionCombo")
-        self.vision_combo.setItemData(0, "Robotics vision (Gemini Robotics-ER).", Qt.ItemDataRole.ToolTipRole)
-        self.vision_combo.setItemData(1, "Local OCR + CV (EasyOCR + OpenCV).", Qt.ItemDataRole.ToolTipRole)
+        self.vision_combo.setItemData(
+            0, "Robotics vision (Gemini Robotics-ER).", Qt.ItemDataRole.ToolTipRole
+        )
+        self.vision_combo.setItemData(
+            1, "Local OCR + CV (EasyOCR + OpenCV).", Qt.ItemDataRole.ToolTipRole
+        )
 
         # Keep the two dropdowns in a dedicated container so they never overlap.
         self.dropdowns = QWidget()
@@ -172,21 +195,21 @@ class ChatWidget(QWidget):
         self.workspace_badge = QLabel("USER")
         self.workspace_badge.setObjectName("workspaceBadge")
         self.workspace_badge.setToolTip("Current workspace")
-        
+
         self.minimize_btn = QPushButton("−")
         self.minimize_btn.setObjectName("minimizeBtn")
         self.minimize_btn.setFixedSize(28, 28)
         self.minimize_btn.setToolTip("Drift into the small")
-        
+
         self.expand_btn = QPushButton("⤢")
         self.expand_btn.setObjectName("expandBtn")
         self.expand_btn.setFixedSize(28, 28)
         self.expand_btn.setToolTip("Expand the horizon")
-        
+
         self.close_btn = QPushButton("×")
         self.close_btn.setObjectName("closeBtn")
         self.close_btn.setFixedSize(28, 28)
-        
+
         h.addWidget(self.logo)
         h.addWidget(self.dropdowns)
         h.addWidget(self.workspace_badge)
@@ -194,9 +217,9 @@ class ChatWidget(QWidget):
         h.addWidget(self.minimize_btn)
         h.addWidget(self.expand_btn)
         h.addWidget(self.close_btn)
-        
+
         layout.addWidget(self.header)
-        
+
         # Chat
         self.chat_display = QTextBrowser()
         self.chat_display.setObjectName("chatDisplay")
@@ -221,9 +244,11 @@ class ChatWidget(QWidget):
         self.compact_stop_btn.setToolTip("Stop voice session")
         self.compact_stop_btn.clicked.connect(self.audio_service.stop_listening)
         layout.addWidget(self.compact_stop_btn)
-        
+
         # Input
-        self.input_hint = QLabel("Open apps, send emails/WhatsApp, fix PC issues, or ask anything…")
+        self.input_hint = QLabel(
+            "Open apps, send emails/WhatsApp, fix PC issues, or ask anything…"
+        )
         self.input_hint.setObjectName("inputHint")
         self.input_hint.setWordWrap(True)
         layout.addWidget(self.input_hint)
@@ -254,11 +279,11 @@ class ChatWidget(QWidget):
         i = QHBoxLayout(self.input_frame)
         i.setContentsMargins(0, 0, 0, 0)
         i.setSpacing(8)
-        
+
         self.input_field = QLineEdit()
         self.input_field.setObjectName("inputField")
         self.input_field.setPlaceholderText("> Type a command...")
-        
+
         self.mic_btn = QPushButton("🎙")
         self.mic_btn.setObjectName("micBtn")
         self.mic_btn.setFixedSize(34, 34)
@@ -267,16 +292,32 @@ class ChatWidget(QWidget):
         self.send_btn = QPushButton("→")
         self.send_btn.setObjectName("sendBtn")
         self.send_btn.setFixedSize(28, 28)
-        
+
         i.addWidget(self.input_field)
         i.addWidget(self.mic_btn)
         i.addWidget(self.send_btn)
-        
+
         layout.addWidget(self.input_frame)
+
+        # Footer with logout link
+        self.footer = QFrame()
+        self.footer.setObjectName("footer")
+        f = QHBoxLayout(self.footer)
+        f.setContentsMargins(4, 2, 4, 0)
+        f.setSpacing(0)
+        f.addStretch()
+        self.logout_btn = QPushButton("Sign Out")
+        self.logout_btn.setObjectName("logoutLink")
+        self.logout_btn.setCursor(Qt.PointingHandCursor)
+        self.logout_btn.setToolTip("Sign out and switch accounts")
+        f.addWidget(self.logout_btn)
+        layout.addWidget(self.footer)
+
         self.setLayout(layout)
 
     def apply_styles(self):
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QToolTip { background: #1a1a1a; color: #e5e5e5; border: 1px solid #262626; padding: 6px 10px; font: 11px 'Segoe UI', 'Inter', sans-serif; }
             ChatWidget { background: rgba(18, 30, 44, 190); border: 1px solid rgba(52, 78, 102, 170); border-radius: 10px; font-family: 'Segoe UI', 'Inter', sans-serif; }
             QFrame#header { background: transparent; }
@@ -329,6 +370,23 @@ class ChatWidget(QWidget):
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0a1a24, stop:1 #0b2a3a);
                 border-color: #0a5f97;
             }
+            QPushButton#logoutBtn {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2a1f0b, stop:1 #3a2a0b);
+                color: #ffd1a8;
+                border: 1px solid #4a3a1b;
+                border-radius: 8px;
+                font: 700 11px 'Segoe UI', 'Inter', sans-serif;
+                padding: 2px;
+            }
+            QFrame#footer { background: transparent; }
+            QPushButton#logoutLink {
+                background: transparent;
+                border: none;
+                color: #ff6b6b;
+                font: 700 12px 'Segoe UI', 'Inter', sans-serif;
+                padding: 4px 8px;
+            }
+            QPushButton#logoutLink:hover { color: #ff4c4c; text-decoration: underline; }
             QPushButton#closeBtn {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2a0b0b, stop:1 #3a0b14);
                 color: #ffd1d1;
@@ -369,7 +427,8 @@ class ChatWidget(QWidget):
             }
             QPushButton#guidanceBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0284C7, stop:1 #0EA5E9); border-color: #7DD3FC; }
             QPushButton#guidanceBtn:pressed { background: #0369A1; border-color: #0284C7; }
-        """)
+        """
+        )
 
     def _on_anchor_clicked(self, url: QUrl):
         u = url.toString()
@@ -481,7 +540,11 @@ class ChatWidget(QWidget):
             return "Planning"
         if low.startswith("--- step") or low.startswith("step "):
             return s.replace("---", "").strip()
-        if low.startswith("startup") or low.startswith("admin:") or low.startswith("logging to:"):
+        if (
+            low.startswith("startup")
+            or low.startswith("admin:")
+            or low.startswith("logging to:")
+        ):
             return "Startup"
         return "Thinking"
 
@@ -491,7 +554,12 @@ class ChatWidget(QWidget):
 
         seq_total = state.get("seq_total")
         seq_step = state.get("seq_step")
-        if isinstance(seq_total, int) and seq_total > 0 and isinstance(seq_step, int) and seq_step > 0:
+        if (
+            isinstance(seq_total, int)
+            and seq_total > 0
+            and isinstance(seq_step, int)
+            and seq_step > 0
+        ):
             return f"Thinking ({seq_step}/{seq_total})"
 
         action = (state.get("action") or "").strip()
@@ -500,14 +568,21 @@ class ChatWidget(QWidget):
 
         step_total = state.get("step_total")
         step = state.get("step")
-        if isinstance(step_total, int) and step_total > 0 and isinstance(step, int) and step > 0:
+        if (
+            isinstance(step_total, int)
+            and step_total > 0
+            and isinstance(step, int)
+            and step > 0
+        ):
             return f"Thinking (step {step}/{step_total})"
         phase = (state.get("phase") or "").strip()
         if phase:
             return f"Thinking ({phase.lower()})"
         return "Thinking"
 
-    def _format_activity_for_thinking(self, raw_line: str, state: dict) -> tuple[bool, str | None]:
+    def _format_activity_for_thinking(
+        self, raw_line: str, state: dict
+    ) -> tuple[bool, str | None]:
         """Turn noisy backend trace lines into clean, user-facing thinking updates.
 
         Returns (reset_lines, append_line). append_line=None means 'do not show a line'.
@@ -713,7 +788,9 @@ class ChatWidget(QWidget):
                     state = {}
                     msg["state"] = state
 
-                reset_lines, append_line = self._format_activity_for_thinking(line, state)
+                reset_lines, append_line = self._format_activity_for_thinking(
+                    line, state
+                )
                 if reset_lines:
                     msg["lines"] = []
 
@@ -733,7 +810,9 @@ class ChatWidget(QWidget):
         self._render_chat()
 
     def update_vision_tooltip(self):
-        tip = self.vision_combo.itemData(self.vision_combo.currentIndex(), Qt.ItemDataRole.ToolTipRole)
+        tip = self.vision_combo.itemData(
+            self.vision_combo.currentIndex(), Qt.ItemDataRole.ToolTipRole
+        )
         if tip:
             self.vision_combo.setToolTip(tip)
 
@@ -884,7 +963,12 @@ class ChatWidget(QWidget):
 
             step_total = state.get("step_total")
             step = state.get("step")
-            if isinstance(step_total, int) and step_total > 0 and isinstance(step, int) and step > 0:
+            if (
+                isinstance(step_total, int)
+                and step_total > 0
+                and isinstance(step, int)
+                and step > 0
+            ):
                 body_lines.append(f"Progress: {step}/{step_total}")
 
             phase = (state.get("phase") or "").strip()
@@ -927,7 +1011,9 @@ class ChatWidget(QWidget):
                     completed=bool(msg.get("completed")),
                 )
             self.chat_display.setTextCursor(cursor)
-            self.chat_display.verticalScrollBar().setValue(self.chat_display.verticalScrollBar().maximum())
+            self.chat_display.verticalScrollBar().setValue(
+                self.chat_display.verticalScrollBar().maximum()
+            )
         finally:
             self.chat_display.setUpdatesEnabled(True)
 
@@ -1109,7 +1195,9 @@ class ChatWidget(QWidget):
         self._append_to_model(kind="error", text=str(message))
 
     def update_mode_tooltip(self):
-        tip = self.mode_combo.itemData(self.mode_combo.currentIndex(), Qt.ItemDataRole.ToolTipRole)
+        tip = self.mode_combo.itemData(
+            self.mode_combo.currentIndex(), Qt.ItemDataRole.ToolTipRole
+        )
         if tip:
             self.mode_combo.setToolTip(tip)
 
@@ -1228,7 +1316,7 @@ class ChatWidget(QWidget):
 
     def show_guidance_input(self, payload: dict):
         """Enable conversational guidance input mode.
-        
+
         The next message from the user will be sent to the guidance session
         instead of starting a new agent task. Also shows a "Next" button.
         """
@@ -1236,9 +1324,13 @@ class ChatWidget(QWidget):
         self._guidance_input_active = True
         label = (payload.get("label") or "Next").strip() or "Next"
         if payload.get("final"):
-            self.input_field.setPlaceholderText("> Click Done to finish or type a reply...")
+            self.input_field.setPlaceholderText(
+                "> Click Done to finish or type a reply..."
+            )
         else:
-            self.input_field.setPlaceholderText("> Type 'done', ask a question, or describe what happened...")
+            self.input_field.setPlaceholderText(
+                "> Type 'done', ask a question, or describe what happened..."
+            )
         self.guidance_btn.setText(label)
         self.guidance_btn.setEnabled(True)
         self.guidance_bar.show()
@@ -1247,7 +1339,9 @@ class ChatWidget(QWidget):
 
     def _on_guidance_btn_clicked(self):
         # Handle new conversational guidance input mode
-        if self._guidance_input_active and isinstance(self._guidance_input_payload, dict):
+        if self._guidance_input_active and isinstance(
+            self._guidance_input_payload, dict
+        ):
             payload = self._guidance_input_payload
             self._guidance_input_payload = None
             self._guidance_input_active = False
@@ -1262,7 +1356,7 @@ class ChatWidget(QWidget):
             if payload.get("event"):
                 payload["event"].set()
             return
-            
+
         # Handle legacy guidance button mode
         payload = self._guidance_payload
         self._guidance_payload = None
@@ -1275,5 +1369,3 @@ class ChatWidget(QWidget):
             self.add_activity_message("Planning next step...")
             payload["result"] = True
             payload["event"].set()
-
-

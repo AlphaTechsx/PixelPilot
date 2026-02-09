@@ -6,8 +6,10 @@ from PySide6.QtWidgets import QMessageBox, QInputDialog
 from agent.agent import AgentOrchestrator
 from config import Config, OperationMode
 from tools.eye import GeminiRoboticsEye
+from backend_client import RateLimitError
 
 logger = logging.getLogger("pixelpilot.controller")
+
 
 class AgentWorker(QThread):
     finished = Signal(bool)
@@ -21,9 +23,14 @@ class AgentWorker(QThread):
         try:
             success = self.agent.run_task(self.command)
             self.finished.emit(success)
+        except RateLimitError as e:
+            logger.warning(f"Rate limit exceeded: {e}")
+            self.agent.chat_window.add_error_message(str(e))
+            self.finished.emit(False)
         except Exception as e:
             logger.exception("Agent execution error")
             self.finished.emit(False)
+
 
 class MainController(QObject):
     def __init__(self, gui_adapter, main_window):
@@ -40,7 +47,9 @@ class MainController(QObject):
         self.gui_adapter.confirmation_requested.connect(self.handle_confirmation)
         self.gui_adapter.input_requested.connect(self.handle_input)
         self.gui_adapter.screenshot_prep_requested.connect(self.handle_screenshot_prep)
-        self.gui_adapter.screenshot_restore_requested.connect(self.handle_screenshot_restore)
+        self.gui_adapter.screenshot_restore_requested.connect(
+            self.handle_screenshot_restore
+        )
         self.gui_adapter.click_through_requested.connect(self.handle_click_through)
         self.gui_adapter.guidance_next_requested.connect(self.handle_guidance_next)
         self.gui_adapter.guidance_input_requested.connect(self.handle_guidance_input)

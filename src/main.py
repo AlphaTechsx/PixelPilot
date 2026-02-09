@@ -8,6 +8,7 @@ from PySide6.QtGui import QPixmap, QShortcut, QKeySequence, QPainter, QColor
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtSvg import QSvgRenderer
 
+
 class GuiStream:
     def __init__(self, logger: logging.Logger, is_error: bool = False):
         self.logger = logger
@@ -20,13 +21,22 @@ class GuiStream:
             return logging.INFO
 
         if not self.is_error:
-            if "error" in s.lower() or "failed" in s.lower() or s.lower().startswith("exception"):
+            if (
+                "error" in s.lower()
+                or "failed" in s.lower()
+                or s.lower().startswith("exception")
+            ):
                 return logging.ERROR
             if "warning" in s.lower() or s.lower().startswith("warning:"):
                 return logging.WARNING
             return logging.DEBUG
 
-        if s.startswith("->") or s.startswith("   ->") or s.startswith("[") or s.startswith("   ["):
+        if (
+            s.startswith("->")
+            or s.startswith("   ->")
+            or s.startswith("[")
+            or s.startswith("   [")
+        ):
             if "error" in s.lower() or "failed" in s.lower():
                 return logging.ERROR
             if "warning" in s.lower() or "warn" in s.lower():
@@ -39,12 +49,14 @@ class GuiStream:
         return logging.ERROR
 
     def write(self, data):
-        if not data: return
+        if not data:
+            return
         self.buffer += str(data)
         while "\n" in self.buffer:
             line, self.buffer = self.buffer.split("\n", 1)
             line = line.rstrip()
-            if not line: continue
+            if not line:
+                continue
 
             noise = (
                 "Using CPU.",
@@ -81,8 +93,10 @@ def _install_qt_message_router(logger: logging.Logger):
         if not text:
             return
 
-
-        if "qt.qpa.window:" in text and "SetProcessDpiAwarenessContext() failed" in text:
+        if (
+            "qt.qpa.window:" in text
+            and "SetProcessDpiAwarenessContext() failed" in text
+        ):
             logger.debug(text)
             return
         if "SetProcessDpiAwarenessContext() failed: Access is denied." in text:
@@ -103,11 +117,28 @@ def _install_qt_message_router(logger: logging.Logger):
 
     qInstallMessageHandler(_handler)
 
+
 def main():
     app = QApplication(sys.argv)
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.ico")
+
+    # Require login before proceeding
+    from ui.login_dialog import require_login
+
+    if not require_login():
+        print("Login cancelled. Exiting.")
+        sys.exit(0)
+
+    logo_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "logos",
+        "pixelpilot-logo-creative.ico",
+    )
     if not os.path.exists(logo_path):
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.svg")
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "logos",
+            "pixelpilot-logo-creative.svg",
+        )
 
     splash = None
     if os.path.exists(logo_path):
@@ -123,7 +154,7 @@ def main():
         else:
             pixmap = QPixmap(logo_path)
             if not pixmap.isNull():
-                 splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
+                splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
 
         if splash:
             splash.show()
@@ -157,7 +188,9 @@ def main():
             script_path = os.path.abspath(__file__)
             params = f'"{script_path}"'
 
-            rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", python_exe, params, None, 1)
+            rc = ctypes.windll.shell32.ShellExecuteW(
+                None, "runas", python_exe, params, None, 1
+            )
             return int(rc) > 32
         except Exception:
             return False
@@ -174,10 +207,10 @@ def main():
         )
 
     window = MainWindow()
-    
+
     adapter = GuiAdapter()
     controller = MainController(adapter, window)
-    
+
     # Wire Adapter -> ChatWidget
     adapter.system_message_received.connect(window.chat_widget.add_system_message)
     adapter.output_message_received.connect(window.chat_widget.add_output_message)
@@ -200,6 +233,28 @@ def main():
     window.chat_widget.command_received.connect(controller.handle_user_command)
     window.chat_widget.mode_changed.connect(controller.handle_mode_changed)
     window.chat_widget.vision_changed.connect(controller.handle_vision_changed)
+
+    # Logout handler
+    def handle_logout():
+        from auth_manager import get_auth_manager
+        from ui.login_dialog import LoginDialog
+
+        # Logout
+        get_auth_manager().logout()
+
+        # Hide main window
+        window.hide()
+
+        # Show login dialog
+        dialog = LoginDialog()
+        if dialog.exec() and dialog.success:
+            # User logged back in, show window again
+            window.show()
+        else:
+            # User cancelled, close app
+            QApplication.quit()
+
+    window.chat_widget.logout_btn.clicked.connect(handle_logout)
 
     # Global shortcuts
     # Keep references; otherwise Python GC can deactivate QShortcut.
@@ -241,16 +296,17 @@ def main():
             QApplication.quit()
 
     hotkeys.activated.connect(_on_hotkey)
-    
+
     adapter.add_activity_message("Startup")
     adapter.add_activity_message(f"Logging to: {log_file_path}")
     adapter.add_activity_message(f"Admin: {'YES' if is_admin() else 'NO'}")
     controller.init_agent()
-    
-    
+
     if controller.agent:
         window.chat_widget.set_operation_mode(controller.agent.mode)
-        window.chat_widget.set_vision_mode("ROBO" if controller.agent.robotics_eye else "OCR")
+        window.chat_widget.set_vision_mode(
+            "ROBO" if controller.agent.robotics_eye else "OCR"
+        )
 
     for mode, msg in early_qt_messages:
         mode_name = getattr(mode, "name", "").lower()
@@ -270,13 +326,15 @@ def main():
             logger.warning(msg)
         else:
             logger.debug(msg)
-    
+
     window.show()
     if splash:
         splash.finish(window)
-        
+
     logger.debug("Pixel Pilot GUI shown")
     app.aboutToQuit.connect(controller.shutdown)
     sys.exit(app.exec())
+
+
 if __name__ == "__main__":
     main()
