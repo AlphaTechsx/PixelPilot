@@ -1,5 +1,4 @@
 import { motion } from 'framer-motion';
-import { useState, useEffect, useRef } from 'react';
 import './QuickStart.css';
 import { Magnetic } from './Magnetic';
 

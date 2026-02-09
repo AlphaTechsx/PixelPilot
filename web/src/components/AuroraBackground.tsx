@@ -1,6 +1,3 @@
-import { motion } from 'framer-motion';
-import { useEffect, useRef } from 'react';
-
 export const AuroraBackground = () => {
     return (
         <div className="aurora-container">

@@ -1,4 +1,3 @@
-import { useRef } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import { Logo } from './Logo';
 import { Magnetic } from './Magnetic';

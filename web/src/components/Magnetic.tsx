@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion';
-import { useRef, useState, ReactNode, MouseEvent } from 'react';
+import { useRef, useState } from 'react';
+import type { ReactNode, MouseEvent } from 'react';
 
 interface MagneticProps {
     children: ReactNode;
