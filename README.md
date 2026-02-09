@@ -21,7 +21,7 @@ PixelPilot is a high-performance Windows desktop automation agent powered by **G
 - **Task Verification & Deferred Replies**: Performs optional screen analysis to confirm success. Replies are buffered and only displayed after verification is complete.
 
 ### 👁️ Advanced Vision System
-- **Lazy Vision Pipeline**: Implements a tiered approach—tries lightweight local OCR (EasyOCR + OpenCV) (default) first and **Gemini Robotics-ER** for complex semantic understanding or unknown icons.
+- **Lazy Vision Pipeline**: Implements a tiered approach—tries lightweight local OCR (EasyOCR + OpenCV) (default) first and **Gemini Robotics-ER** for complex semantic understanding or unknown icons. 
 - **Incremental Screenshots**: Only captures and analyzes new screenshots when the screen state has changed, significantly reducing API latency.
 
 ### 🖥️ Desktop Orchestration

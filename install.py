@@ -38,7 +38,7 @@ def run_as_admin() -> None:
 
 
 def ensure_venv(venv_dir: Path = DEFAULT_VENV_DIR) -> str | None:
-    """Create a venv if it does not exist and return its python executable path."""
+    """Create a venv if it does not exist and return its python executable path.""" 
     venv_dir = Path(venv_dir)
     python_exe = venv_dir / ("Scripts" if os.name == "nt" else "bin") / (
         "python.exe" if os.name == "nt" else "python"
