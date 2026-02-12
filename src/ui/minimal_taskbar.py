@@ -1,5 +1,6 @@
 import sys
 import logging
+import ctypes
 from typing import TYPE_CHECKING, List, Dict
 
 from PySide6.QtCore import QTimer, Qt, QPoint
@@ -198,7 +199,6 @@ class MinimalTaskbar(QWidget):
             logger.debug(f"Taskbar update error: {e}")
 
     def activate_window(self, hwnd):
-        import ctypes
         user32 = ctypes.windll.user32
         user32.SetForegroundWindow(hwnd)
         user32.ShowWindow(hwnd, 5) # SW_SHOW

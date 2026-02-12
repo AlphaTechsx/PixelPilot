@@ -1,5 +1,6 @@
 import time
 from typing import Optional
+import ctypes
 import pyautogui
 import pyperclip
 
@@ -92,7 +93,6 @@ class KeyboardController:
                 x, y = desktop_manager.get_cursor_pos()
                 hwnd = desktop_manager.get_window_at_point(x, y)
             if hwnd:
-                import ctypes
                 user32 = ctypes.windll.user32
                 for char in text:
                     user32.PostMessageW(hwnd, 0x0102, ord(char), 0)
@@ -114,7 +114,6 @@ class KeyboardController:
                 x, y = desktop_manager.get_cursor_pos()
                 hwnd = desktop_manager.get_window_at_point(x, y)
             if hwnd:
-                import ctypes
                 user32 = ctypes.windll.user32
                 key_lower = key.lower()
                 vk = self.VK_MAPPING.get(key_lower)
@@ -138,7 +137,6 @@ class KeyboardController:
         if desktop_manager:
             hwnd = desktop_manager.get_focused_window()
             if hwnd:
-                import ctypes
                 user32 = ctypes.windll.user32
                 vks = []
                 for key in keys:

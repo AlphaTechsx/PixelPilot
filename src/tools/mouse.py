@@ -1,5 +1,6 @@
 import ctypes
 import time
+from ctypes import wintypes
 
 PUL = ctypes.POINTER(ctypes.c_ulong)
 
@@ -76,8 +77,6 @@ def click(desktop_manager=None):
         hwnd = desktop_manager.get_window_at_point(x, y)
         if hwnd:
             desktop_manager.set_foreground_window(hwnd)
-            import ctypes
-            from ctypes import wintypes
             user32 = ctypes.windll.user32
             
             point = wintypes.POINT(x, y)

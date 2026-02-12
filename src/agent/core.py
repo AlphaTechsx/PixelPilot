@@ -1,4 +1,5 @@
 import os
+import ctypes
 import pyautogui
 import logging
 import time
@@ -461,7 +462,6 @@ class AgentOrchestrator:
         """
         Fixes mouse drift caused by Windows Display Scaling.
         """
-        import ctypes
         try:
             user32 = ctypes.windll.user32
             if not self.chat_window:
