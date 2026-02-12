@@ -1,18 +1,24 @@
+from .base import BaseSkill
 import asyncio
 import os
 from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
 
 
-class MediaSkill:
+class MediaSkill(BaseSkill):
     """
     Control Media (Spotify, etc.) via Windows System Media Transport Controls.
     Zero Configuration required (No API Keys).
     """
+    name = "Media"
 
     def __init__(self):
-        self.enabled = True
+        super().__init__()
         self.manager = None
-        print("Media Skill: Enabled (Windows Media Controls)")
+        self.register_method("play", self.play)
+        self.register_method("pause", self.pause)
+        self.register_method("next", self.next_track)
+        self.register_method("previous", self.previous_track)
+        self.register_method("status", self.get_status)
 
     async def _get_session(self):
         if not self.manager:

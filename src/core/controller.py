@@ -3,7 +3,7 @@ import threading
 import logging
 from PySide6.QtCore import QObject, Slot, QThread, Signal, Qt, QTimer, QCoreApplication
 from PySide6.QtWidgets import QMessageBox, QInputDialog
-from agent.agent import AgentOrchestrator
+from agent.core import AgentOrchestrator
 from config import Config, OperationMode
 from tools.eye import GeminiRoboticsEye
 from backend_client import RateLimitError
@@ -178,9 +178,6 @@ class MainController(QObject):
             return
 
         self.gui_adapter.add_activity_message(f"Executing: {text}")
-        
-        if self.agent.active_workspace == "user":
-            self.main_window.set_click_through_enabled(True)
         
         self.update_sidecar_visibility()
 

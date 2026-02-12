@@ -32,13 +32,13 @@ class LoginDialog(QDialog):
 
     def _setup_ui(self):
         self.setWindowTitle("PixelPilot - Login")
-        self.setFixedSize(420, 480)
+        self.setFixedSize(420, 700)
         self.setWindowFlags(Qt.Dialog | Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.container = QFrame(self)
         self.container.setObjectName("container")
-        self.container.setGeometry(0, 0, 420, 480)
+        self.container.setGeometry(0, 0, 420, 700)
 
         layout = QVBoxLayout(self.container)
         layout.setSpacing(12)
@@ -53,12 +53,12 @@ class LoginDialog(QDialog):
             os.path.dirname(os.path.abspath(__file__)),
             "..",
             "logos",
-            "pixelpilot-logo-creative.svg",
+            "pixelpilot-icon.svg",
         )
         if os.path.exists(logo_path):
             renderer = QSvgRenderer(logo_path)
             if renderer.isValid():
-                pixmap = QPixmap(200, 60)
+                pixmap = QPixmap(50, 50)
                 pixmap.fill(QColor("transparent"))
                 painter = QPainter(pixmap)
                 renderer.render(painter)
@@ -141,6 +141,28 @@ class LoginDialog(QDialog):
         self.register_btn.setCursor(Qt.PointingHandCursor)
         self.register_btn.clicked.connect(self._on_register)
         layout.addWidget(self.register_btn)
+
+        layout.addSpacing(16)
+
+        # API Key Section
+        api_key_label = QLabel("Or use your own API Key")
+        api_key_label.setObjectName("dividerText")
+        api_key_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(api_key_label)
+
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setObjectName("inputField")
+        self.api_key_input.setPlaceholderText("Paste Gemini API Key (starts with AIza...)")
+        self.api_key_input.setMinimumHeight(42)
+        self.api_key_input.returnPressed.connect(self._on_use_api_key)
+        layout.addWidget(self.api_key_input)
+
+        self.use_key_btn = QPushButton("Use API Key")
+        self.use_key_btn.setObjectName("secondaryBtn")
+        self.use_key_btn.setMinimumHeight(44)
+        self.use_key_btn.setCursor(Qt.PointingHandCursor)
+        self.use_key_btn.clicked.connect(self._on_use_api_key)
+        layout.addWidget(self.use_key_btn)
 
         layout.addSpacing(8)
 
@@ -291,6 +313,51 @@ class LoginDialog(QDialog):
             self.accept()
         except RuntimeError as e:
             self._set_status(str(e), ok=False)
+
+    def _on_use_api_key(self):
+        msg = self.api_key_input.text().strip()
+        if not msg:
+            self._set_status("Please enter an API Key", ok=False)
+            return
+
+        if not msg.startswith("AIza"):
+            self._set_status("Invalid API Key format (should start with AIza)", ok=False)
+            return
+
+        self._set_status("Verifying key...", ok=True)
+        
+        # Save to .env
+        try:
+            from config import Config
+            env_path = os.path.join(Config.PROJECT_ROOT, ".env")
+            
+            # Read existing
+            lines = []
+            if os.path.exists(env_path):
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            
+            # Remove existing key if present
+            lines = [l for l in lines if not l.startswith("GEMINI_API_KEY=")]
+            
+            # Add new key
+            if lines and not lines[-1].endswith("\n"):
+                lines.append("\n")
+            lines.append(f"GEMINI_API_KEY={msg}\n")
+            
+            with open(env_path, "w", encoding="utf-8") as f:
+                f.writelines(lines)
+                
+            # Update runtime config
+            os.environ["GEMINI_API_KEY"] = msg
+            Config.GEMINI_API_KEY = msg
+            Config.USE_DIRECT_API = True
+            
+            self.success = True
+            self.accept()
+            
+        except Exception as e:
+            self._set_status(f"Failed to save key: {e}", ok=False)
 
     def _on_register(self):
         email = self.email_input.text().strip()

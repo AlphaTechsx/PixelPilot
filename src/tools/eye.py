@@ -2,35 +2,46 @@ import concurrent.futures
 import warnings
 import json
 import os
-import cv2
-import easyocr
-import numpy as np
-import torch
 from PIL import Image
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 import base64
 
-from backend_client import BackendClient
+from backend_client import get_client
+from agent.prompts import ROBOTICS_EYE_DYNAMIC_PROMPT, ROBOTICS_EYE_GENERAL_PROMPT
 
 warnings.filterwarnings(
     "ignore", message="'pin_memory' argument is set as true but no accelerator is found"
 )
+
+import logging
+logger = logging.getLogger("pixelpilot.eye")
 
 
 class LocalCVEye:
     """Local computer-vision based eye using EasyOCR + contour/icon detection."""
 
     def __init__(self, lang: str = "en", use_gpu: Optional[bool] = None):
-        self.use_gpu = torch.cuda.is_available() if use_gpu is None else use_gpu
-        self.reader = easyocr.Reader([lang], gpu=self.use_gpu)
+        self.lang = lang
+        self._use_gpu = use_gpu
+        self._reader = None
+
+    @property
+    def reader(self):
+        if self._reader is None:
+            import easyocr
+            import torch
+            use_gpu = torch.cuda.is_available() if self._use_gpu is None else self._use_gpu
+            logger.info(f"Initializing EasyOCR Reader (GPU={use_gpu})...")
+            self._reader = easyocr.Reader([self.lang], gpu=use_gpu)
+        return self._reader
 
     def _run_ocr(self, img):
-        print("   -> Running OCR...")
+        logger.info("Running OCR...")
         return self.reader.readtext(img)
 
     def _run_icon_detection(self, img, text_boxes):
-        print("   -> Detecting Icons (Dual-Pass High Sensitivity)...")
+        logger.info("Detecting Icons (Dual-Pass High Sensitivity)...")
         return self.find_mystery_icons_sensitive(img, text_boxes)
 
     def get_screen_elements(self, image_path: str) -> List[Dict[str, Any]]:
@@ -38,6 +49,7 @@ class LocalCVEye:
 
         Uses parallel processing for faster detection.
         """
+        import cv2
         img = cv2.imread(image_path)
         if img is None:
             raise ValueError(f"Could not open or find the image: {image_path}")
@@ -107,6 +119,9 @@ class LocalCVEye:
         """Combines Canny Edges + Adaptive Thresholding to find both
         outlined icons and filled blobs.
         """
+        import cv2
+        import numpy as np
+        
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         candidates = []
 
@@ -193,6 +208,7 @@ class LocalCVEye:
     @staticmethod
     def non_max_suppression(boxes, overlapThresh):
         """Standard NMS to remove overlapping bounding boxes."""
+        import numpy as np
         if len(boxes) == 0:
             return []
 
@@ -265,7 +281,7 @@ class GeminiRoboticsEye:
         model: str = "gemini-robotics-er-1.5-preview",
     ):
         self.model = model
-        self.client = BackendClient()
+        self.client = get_client()
 
     def get_screen_elements(
         self,
@@ -275,7 +291,7 @@ class GeminiRoboticsEye:
         task_context: Optional[str] = None,
         current_step: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        print("   -> Using Gemini Robotics-ER for element detection (via Backend)...")
+        logger.info("Using Gemini Robotics-ER for element detection (via Backend)...")
 
         with open(image_path, "rb") as f:
             image_bytes = f.read()
@@ -353,18 +369,18 @@ class GeminiRoboticsEye:
                     }
                 )
 
-            print(f"   -> Found {len(elements)} elements using Gemini Robotics")
+            logger.info(f"Found {len(elements)} elements using Gemini Robotics")
             return elements
 
         except Exception as e:
-            print(f"   -> Error calling Backend API: {e}")
+            logger.error(f"Error calling Backend API: {e}")
             return []
 
     def get_screen_elements_with_boxes(
         self, image_path: str, max_elements: int = 25
     ) -> List[Dict[str, Any]]:
-        print(
-            "   -> Using Gemini Robotics-ER for bounding box detection (via Backend)..."
+        logger.info(
+            "Using Gemini Robotics-ER for bounding box detection (via Backend)..."
         )
 
         with open(image_path, "rb") as f:
@@ -456,20 +472,20 @@ Return only the JSON array.
                     }
                 )
 
-            print(f"   -> Found {len(elements)} elements with bounding boxes")
+            logger.info(f"Found {len(elements)} elements with bounding boxes")
             return elements
 
         except json.JSONDecodeError as e:
-            print(f"   -> Error parsing Gemini response: {e}")
+            logger.error(f"Error parsing Gemini response: {e}")
             return []
         except Exception as e:
-            print(f"   -> Error calling Backend API: {e}")
+            logger.error(f"Error calling Backend API: {e}")
             return []
 
     def find_specific_elements(
         self, image_path: str, queries: List[str]
     ) -> List[Dict[str, Any]]:
-        print(f"   -> Searching for specific elements: {queries} (via Backend)")
+        logger.info(f"Searching for specific elements: {queries} (via Backend)")
 
         with open(image_path, "rb") as f:
             image_bytes = f.read()
@@ -546,11 +562,11 @@ Return only the JSON array, no code fencing.
                     }
                 )
 
-            print(f"   -> Found {len(elements)} matching elements")
+            logger.info(f"Found {len(elements)} matching elements")
             return elements
 
         except Exception as e:
-            print(f"   -> Error: {e}")
+            logger.error(f"Error: {e}")
             return []
 
     def _build_dynamic_prompt(
@@ -620,75 +636,16 @@ Return only the JSON array, no code fencing.
 
         if priority_types or focus_hints:
             type_list = ", ".join(priority_types) if priority_types else "all interactive elements"
-
-            prompt = f"""
-Analyze this screenshot to identify UI elements relevant to the current task.
-
-TASK CONTEXT: {task_context or "General UI interaction"}
-CURRENT STEP: {current_step or "Detecting interactive elements"}
-
-DETECTION PRIORITIES:
-"""
-            if focus_hints:
-                for hint in focus_hints:
-                    prompt += f"- {hint}\n"
-
-            prompt += f"""
-
-PRIMARY FOCUS: {type_list}
-
-Return a JSON array with the following format:
-[
-  {{
-    "point": [y, x],
-    "label": "descriptive name",
-    "type": "button|text_field|icon|link|menu|checkbox|radio_button|dropdown|tab|other",
-    "confidence": 0.0-1.0,
-    "relevance": 0.0-1.0
-  }}
-]
-
-GUIDELINES:
-- **VISUAL ANCHORING**: For elements with both an Icon and Text (e.g., a "Settings" row with a gear icon), the point MUST be on the **ICON graphic**, not the text.
-- **CENTERING**: The point should be the exact visual center of the clickable graphic.
-- Points are in [y, x] format normalized to 0-1000.
-- Label should describe what the element is or its text content.
-- Type must be one of the listed UI element types.
-- Confidence: how certain this is an interactive element (0.0-1.0).
-- Relevance: how relevant this element is to the task context (0.0-1.0).
-- Limit to {max_elements} elements, prioritizing by RELEVANCE to the task.
-- Focus heavily on elements that match the task context.
-- If task mentions specific text, prioritize elements with that text.
-- Ignore decorative or irrelevant elements.
-
-IMPORTANT: Return ONLY the JSON array, no additional text or code fencing.
-"""
+            focus_hints_str = "\n".join([f"- {hint}" for hint in focus_hints])
+            prompt = ROBOTICS_EYE_DYNAMIC_PROMPT.format(
+                task_context=task_context or "General UI interaction",
+                current_step=current_step or "Detecting interactive elements",
+                focus_hints_str=focus_hints_str,
+                type_list=type_list,
+                max_elements=max_elements,
+            )
         else:
-            prompt = f"""
-Identify all interactive UI elements in this screenshot.
-
-Return a JSON array with the following format:
-[
-  {{
-    "point": [y, x],
-    "label": "descriptive name",
-    "type": "button|text_field|icon|link|menu|checkbox|radio_button|dropdown|tab|other",
-    "confidence": 0.0-1.0
-  }}
-]
-
-GUIDELINES:
-- **VISUAL ANCHORING**: For elements with both an Icon and Text, target the **ICON graphic**.
-- **CENTERING**: points must be the visual center of the interactive zone.
-- Points are in [y, x] format normalized to 0-1000.
-- Label should describe what the element is or contains.
-- Type should be one of the standard UI element types.
-- Confidence should reflect certainty this is interactive.
-- Limit to {max_elements} most prominent elements.
-- Focus on clickable, typeable, or otherwise interactive elements.
-
-Return only the JSON array, no additional text or code fencing.
-"""
+            prompt = ROBOTICS_EYE_GENERAL_PROMPT.format(max_elements=max_elements)
 
         return prompt
 

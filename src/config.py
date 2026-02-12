@@ -1,4 +1,5 @@
 import os
+import logging
 from pathlib import Path
 from enum import Enum
 from dotenv import load_dotenv
@@ -11,10 +12,14 @@ class OperationMode(Enum):
     SAFE = "safe"
     AUTO = "auto"
 
+logger = logging.getLogger("pixelpilot.config")
+
 
 class Config:
     BACKEND_URL = os.getenv("BACKEND_URL", "https://pixel-pilot-5jpy.onrender.com")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+    USE_DIRECT_API = bool(GEMINI_API_KEY)
 
     DEFAULT_MODE = OperationMode(os.getenv("DEFAULT_MODE", OperationMode.AUTO.value))
     VISION_MODE = os.getenv("VISION_MODE", "ocr").strip().lower()
@@ -117,20 +122,11 @@ class Config:
         elif mode_str == "auto":
             return OperationMode.AUTO
         else:
-            print(f"Unknown mode '{mode_str}', using default: {cls.DEFAULT_MODE.value}")
+            logger.warning(f"Unknown mode '{mode_str}', using default: {cls.DEFAULT_MODE.value}")
             return cls.DEFAULT_MODE
 
     @classmethod
     def is_dangerous_action(cls, action_description: str) -> bool:
-        """
-        Check if an action is potentially dangerous.
-
-        Args:
-            action_description: Description of the action
-
-        Returns:
-            bool: True if action is dangerous
-        """
         action_lower = action_description.lower()
 
         for cmd in cls.DANGEROUS_COMMANDS:
@@ -145,16 +141,6 @@ class Config:
 
     @classmethod
     def should_ask_confirmation(cls, mode: OperationMode, action_description: str) -> bool:
-        """
-        Determine if confirmation should be requested for an action.
-
-        Args:
-            mode: Current operation mode
-            action_description: Description of the action
-
-        Returns:
-            bool: True if confirmation is needed
-        """
         if mode == OperationMode.GUIDE:
             return False
 
@@ -168,9 +154,29 @@ class Config:
 
     @classmethod
     def validate(cls):
-        """Validate configuration and raise errors if misconfigured."""
-        print("Configuration validated successfully")
-        print(f"   Model: {cls.GEMINI_MODEL}")
-        print(f"   Backend: {cls.BACKEND_URL}")
-        print(f"   Default Mode: {cls.DEFAULT_MODE.value}")
-        print(f"   Turbo Mode: {'ENABLED' if cls.TURBO_MODE else 'DISABLED'}")
+        logger.info("Configuration validated successfully")
+        logger.debug(f"Model: {cls.GEMINI_MODEL}")
+        logger.debug(f"Backend: {cls.BACKEND_URL}")
+        logger.debug(f"Default Mode: {cls.DEFAULT_MODE.value}")
+        logger.debug(f"Turbo Mode: {'ENABLED' if cls.TURBO_MODE else 'DISABLED'}")
+
+    @classmethod
+    def clear_api_key(cls):
+        """Clears the GEMINI_API_KEY from environment and .env file."""
+        cls.GEMINI_API_KEY = None
+        cls.USE_DIRECT_API = False
+        os.environ.pop("GEMINI_API_KEY", None)
+
+        env_path = cls.PROJECT_ROOT / ".env"
+        if env_path.exists():
+            try:
+                with open(env_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+                
+                new_lines = [l for l in lines if not l.strip().startswith("GEMINI_API_KEY=")]
+                
+                with open(env_path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+                logger.info("Removed GEMINI_API_KEY from .env")
+            except Exception as e:
+                logger.error(f"Failed to clear API key from .env: {e}")

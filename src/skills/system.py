@@ -1,11 +1,17 @@
+from .base import BaseSkill
 import keyboard
 import ctypes
 
 
-class SystemSkill:
+class SystemSkill(BaseSkill):
+    name = "System"
+
     def __init__(self):
-        self.enabled = True
-        print("System Skill: Enabled (Volume, Power, Windows)")
+        super().__init__()
+        self.register_method("volume", self.set_volume)
+        self.register_method("lock", self.lock_screen)
+        self.register_method("minimize", self.minimize_all)
+        self.register_method("settings", self.open_settings)
 
     def set_volume(self, action):
         try:

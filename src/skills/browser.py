@@ -1,12 +1,16 @@
+from .base import BaseSkill
 import webbrowser
 
+class BrowserSkill(BaseSkill):
+    name = "Browser"
 
-class BrowserSkill:
     def __init__(self):
-        self.enabled = True
-        print("Browser Skill: Enabled")
+        super().__init__()
+        self.register_method("open", self.open_url)
+        self.register_method("open_url", self.open_url)
+        self.register_method("search", self.search)
 
-    def open_url(self, url, desktop_manager=None):
+    def open_url(self, url=None, desktop_manager=None):
         if not url:
             return "No URL provided"
         if not url.startswith("http"):
@@ -20,7 +24,7 @@ class BrowserSkill:
         except Exception as e:
             return f"Error opening URL: {e}"
 
-    def search(self, query, desktop_manager=None):
+    def search(self, query=None, desktop_manager=None):
         if not query:
             return "No query provided"
         try:

@@ -1,10 +1,14 @@
-import json
-import base64
 import io
+import base64
 from typing import Any, Dict, List, Optional
+import logging
 from PIL import Image
-from agent.brain import get_model
+from config import Config
+from backend_client import get_client
 from pydantic import BaseModel, Field
+from agent.prompts import VERIFY_TASK_COMPLETION_PROMPT
+
+logger = logging.getLogger("pixelpilot.verify")
 
 
 def verify_task_completion(
@@ -23,7 +27,7 @@ def verify_task_completion(
         clean_image = Image.open(original_path)
         annotated_image = Image.open(debug_path)
     except Exception as e:
-        print(f"Error loading images for verification: {e}")
+        logger.error(f"Error loading images for verification: {e}")
         return None
 
     class VerificationResult(BaseModel):
@@ -49,34 +53,12 @@ def verify_task_completion(
         ]
     )
 
-    prompt_text = f"""
-You are an AI OS Agent tasked with VERIFYING task completion.
-
-ORIGINAL USER COMMAND: "{user_command}"
-EXPECTED RESULT: "{expected_result}"
-
-ACTIONS TAKEN:
-{history_str}
-
-CURRENT SCREEN ELEMENTS:
-{elements_str}
-
-ATTACHMENTS:
-1. [Current Screen]: Shows the current state after all actions
-2. [Annotated Screen]: Shows UI elements with IDs (use for reference)
-
-YOUR TASK:
-Carefully analyze the current screen state and determine if the user's original command
-has been ACTUALLY COMPLETED.
-
-VERIFICATION CRITERIA:
-- Does the screen show evidence that the task was completed?
-- Are the expected UI elements visible? (e.g., if "Open Notepad", is Notepad visible?)
-- Does the current state match what was expected?
-
-RESPONSE FORMAT:
-Return a JSON object satisfying the VerificationResult schema.
-"""
+    prompt_text = VERIFY_TASK_COMPLETION_PROMPT.format(
+        user_command=user_command,
+        expected_result=expected_result,
+        history_str=history_str,
+        elements_str=elements_str,
+    )
 
     def img_to_dict(img):
         img_byte_arr = io.BytesIO()
@@ -97,8 +79,9 @@ Return a JSON object satisfying the VerificationResult schema.
     contents = [{"role": "user", "parts": parts}]
 
     try:
-        model = get_model()
-        response_data = model.generate_content(
+        client = get_client()
+        response_data = client.generate_content(
+            model=Config.GEMINI_MODEL,
             contents=contents,
             config={
                 "response_mime_type": "application/json",
@@ -110,5 +93,5 @@ Return a JSON object satisfying the VerificationResult schema.
         return result_obj.model_dump()
 
     except Exception as e:
-        print(f"Error during verification: {e}")
+        logger.error(f"Error during verification: {e}")
         return None

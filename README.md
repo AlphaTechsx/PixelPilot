@@ -93,9 +93,10 @@ PIXELPILOT_GATEWAY_TOKEN=pixelpilot-secret
 Tip: you can start from [env.example](env.example).
 
 Notes:
-- `DEFAULT_MODE` selects the initial UI mode.
-- `AGENT_MODE` overrides `DEFAULT_MODE` when present.
-- `VISION_MODE` is `robo` (Gemini Robotics-ER) or `ocr` (local OCR + CV).
+- `GEMINI_API_KEY`: If set, PixelPilot connects directly to Gemini (bypassing the backend proxy). No login required.
+- `DEFAULT_MODE`: Selects the initial UI mode.
+- `AGENT_MODE`: Overrides `DEFAULT_MODE` when present.
+- `VISION_MODE`: `robo` (Gemini Robotics-ER) or `ocr` (local OCR + CV).
 
 ### 3. Run
 

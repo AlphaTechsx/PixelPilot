@@ -477,7 +477,7 @@ class AgentDesktopManager:
             windows = self.list_windows()
             for w in windows:
                 try:
-                    user32.PostMessageW(w["hwnd"], 0x0010, 0, 0)  # WM_CLOSE
+                    user32.PostMessageW(w["hwnd"], 0x0010, 0, 0)
                 except Exception:
                     pass
 

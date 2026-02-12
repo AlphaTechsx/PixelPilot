@@ -1,7 +1,3 @@
-"""
-Interactive Guidance Mode - Step-by-step tutorial system.
-"""
-
 import json
 import logging
 import time
@@ -10,12 +6,13 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from agent.brain import get_model
-from agent.guidance_prompts import (
+from agent.prompts import (
     INSTRUCTION_PROMPT,
     CLARIFICATION_PROMPT,
     VERIFICATION_PROMPT,
     INTENT_PROMPT,
     GOAL_COMPLETE_PROMPT,
+    GUIDANCE_TROUBLESHOOT_PROMPT,
 )
 from config import Config
 
@@ -317,16 +314,12 @@ class GuidanceSession:
         """Handle when user reports a problem."""
         elements_desc = self._format_elements(elements)
         
-        prompt = f"""The user is trying to: {self.user_goal}
-
-The instruction was: {self.current_instruction or 'Getting started'}
-
-They reported a problem: "{problem_description}"
-
-Current screen shows:
-{elements_desc}
-
-Give them helpful troubleshooting advice or an alternative approach. Be encouraging and specific."""
+        prompt = GUIDANCE_TROUBLESHOOT_PROMPT.format(
+            user_goal=self.user_goal,
+            current_instruction=self.current_instruction or "Getting started",
+            problem_description=problem_description,
+            elements_description=elements_desc,
+        )
         
         try:
             contents = [prompt]
@@ -452,16 +445,25 @@ Give them helpful troubleshooting advice or an alternative approach. Be encourag
             },
         }
         
-        # Request user input via GUI
         self.chat_window.request_guidance_input(payload)
         
-        while True:
-            self.stop_check()
-            if payload["event"].wait(0.2):
+        start_time = time.time()
+        timeout = 300
+        
+        while time.time() - start_time < timeout:
+            try:
+                self.stop_check()
+            except Exception as e:
+                self._log(f"Stop check triggered: {e}")
+                return None, False
+                
+            if payload["event"].wait(0.5):
                 if payload.get("cancelled"):
                     return None, False
                 return payload.get("feedback"), True
-            time.sleep(0.05)
+            
+        self._log("Guidance input timed out.")
+        return None, False
 
     def _wait_for_user_ack(self, label: str = "Done") -> None:
         if not self.chat_window:

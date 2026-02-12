@@ -1,8 +1,14 @@
 import json
+import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 from agent.brain import get_model
 from config import Config, OperationMode
+from agent.prompts import (
+    GENERATE_CLARIFICATION_QUESTION_PROMPT,
+    INTEGRATE_CLARIFICATION_ANSWER_PROMPT,
+)
 
 
 class ClarificationQuestion(BaseModel):
@@ -27,8 +33,9 @@ class RefinedAction(BaseModel):
 class ClarificationManager:
     """
     Manages user clarification when AI is uncertain about actions.
-    Integrates with the agent to ask questions and incorporate user feedback.
     """
+    
+    logger = logging.getLogger("pixelpilot.clarification")
 
     def __init__(self, chat_window=None, mode: OperationMode = OperationMode.SAFE):
         """
@@ -88,8 +95,7 @@ class ClarificationManager:
         if self.chat_window:
             return self.chat_window.ask_input("Clarification Needed", question)
         else:
-            print("\n🤔 CLARIFICATION NEEDED")
-            print(f"Question: {question}")
+            self.logger.info(f"CLARIFICATION NEEDED: {question}")
             answer = input("Your answer: ").strip()
             return answer if answer else None
 
@@ -121,9 +127,9 @@ class ClarificationManager:
                     pass
             return None
         else:
-            print(f"\n🤔 {question}")
+            self.logger.info(f"{question}")
             for i, opt in enumerate(options):
-                print(f"  {i + 1}. {opt}")
+                self.logger.info(f"  {i + 1}. {opt}")
 
             try:
                 choice_str = input("\nYour choice (number): ").strip()
@@ -151,31 +157,13 @@ class ClarificationManager:
             action_type = action.get("action_type", "unknown")
             reasoning = action.get("reasoning", "")
 
-            prompt = f"""
-You are helping an AI agent clarify an uncertain action.
-
-USER COMMAND: "{user_command}"
-
-AI's PLANNED ACTION:
-- Type: {action_type}
-- Parameters: {action.get("params", {})}
-- Reasoning: {reasoning}
-- Confidence: {confidence:.0%}
-
-The AI is uncertain about this action. Generate a clear, specific question to ask the user
-that will help clarify what action to take.
-
-The question should:
-1. Be concise and easy to understand
-2. Offer specific choices when possible (A/B/C format)
-3. Help resolve the uncertainty
-
-Return JSON:
-{{
-    "question": "The specific question to ask",
-    "options": ["Option A", "Option B", "Option C"]  // Optional: provide choices
-}}
-"""
+            prompt = GENERATE_CLARIFICATION_QUESTION_PROMPT.format(
+                user_command=user_command,
+                action_type=action_type,
+                params=action.get("params", {}),
+                reasoning=reasoning,
+                confidence=confidence,
+            )
 
             model = get_model()
             response = model.generate_content(
@@ -199,7 +187,7 @@ Return JSON:
                 return question
 
         except Exception as e:
-            print(f"Error generating clarification question: {e}")
+            self.logger.error(f"Error generating clarification question: {e}")
 
             return f"I'm {confidence:.0%} confident about {action_type}. Can you provide more details about what you want to do?"
 
@@ -226,32 +214,11 @@ Return JSON:
                 }
             )
 
-            prompt = f"""
-You are helping interpret user feedback to refine an AI action.
-
-ORIGINAL USER COMMAND: "{user_command}"
-
-ORIGINAL PLANNED ACTION:
-{json.dumps(action, indent=2)}
-
-USER'S CLARIFICATION/ANSWER:
-"{answer}"
-
-Based on the user's answer, provide the corrected/refined action.
-Maintain the same JSON structure but update the parameters and reasoning as needed.
-Set confidence to 1.0 since we now have user confirmation.
-
-Return the updated action in the same JSON format:
-{{
-    "action_type": "<type>",
-    "params": {{}},
-    "reasoning": "<updated reasoning>",
-    "confidence": 1.0,
-    "clarification_needed": false,
-    "task_complete": <bool>,
-    "expected_result": "<what should happen>"
-}}
-"""
+            prompt = INTEGRATE_CLARIFICATION_ANSWER_PROMPT.format(
+                user_command=user_command,
+                action_json=json.dumps(action, indent=2),
+                answer=answer,
+            )
 
             model = get_model()
             response = model.generate_content(
@@ -265,7 +232,7 @@ Return the updated action in the same JSON format:
             return RefinedAction.model_validate_json(response.text).model_dump()
 
         except Exception as e:
-            print(f"Error integrating clarification answer: {e}")
+            self.logger.error(f"Error integrating clarification answer: {e}")
 
             action["clarification_needed"] = False
             return action
@@ -288,7 +255,7 @@ Return the updated action in the same JSON format:
         count = loop_info.get("count", 0)
 
         message = f"""
-🔄 LOOP DETECTED
+LOOP DETECTED
 
 I've been stuck repeating the same action {count} times without progress.
 
@@ -315,9 +282,9 @@ The AI suggests trying these alternatives:
                 except ValueError:
                     return choice
         else:
-            print(f"\n⚠️  {message}")
+            self.logger.warning(f"LOOP DETECTED: {message}")
             for i, opt in enumerate(options, 1):
-                print(f"{i}. {opt}")
+                self.logger.info(f"{i}. {opt}")
 
             choice_str = input("\nYour choice (number or describe approach): ").strip()
 

@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 import winreg
@@ -12,8 +13,9 @@ from typing import Dict, List, Optional, Tuple
 class AppIndexer:
     """
     Indexes Windows applications from multiple sources for fast lookup.
-    Discovers apps from Start Menu, system tray, registry, and common install locations.
     """
+    
+    logger = logging.getLogger("pixelpilot.app_indexer")
 
     def __init__(
         self,
@@ -58,16 +60,16 @@ class AppIndexer:
                     if age < timedelta(days=7):
                         self.index = data.get("apps", {})
                         should_rebuild = False
-                        print(f"Loaded app index from cache ({len(self.index)} apps)")
+                        self.logger.info(f"Loaded app index from cache ({len(self.index)} apps)")
                 else:
                     self.index = data.get("apps", {})
                     should_rebuild = False
 
             except Exception as e:
-                print(f"Error loading app index cache: {e}")
+                self.logger.error(f"Error loading app index cache: {e}")
 
         if should_rebuild:
-            print("Building app index... (this may take a few seconds)")
+            self.logger.info("Building app index... (this may take a few seconds)")
             self._build_index()
             self._save_cache()
 
@@ -83,7 +85,7 @@ class AppIndexer:
 
         self._index_registry()
 
-        print(f"App index built: {len(self.index)} applications found")
+        self.logger.info(f"App index built: {len(self.index)} applications found")
 
     def _index_start_menu(self):
         """Index applications from Start Menu shortcuts."""
@@ -164,7 +166,7 @@ class AppIndexer:
                     pass
 
         except Exception as e:
-            print(f"Error indexing processes: {e}")
+            self.logger.error(f"Error indexing processes: {e}")
 
     def _index_registry(self):
         """Index applications registered in Windows Registry."""
@@ -341,14 +343,53 @@ class AppIndexer:
             with open(self.cache_path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
 
-            print(f"App index cached to {self.cache_path}")
+            self.logger.info(f"App index cached to {self.cache_path}")
         except Exception as e:
-            print(f"Warning: Could not save app index cache: {e}")
+            self.logger.warning(f"Warning: Could not save app index cache: {e}")
 
     def refresh(self):
         """Force rebuild the index."""
         self._build_index()
         self._save_cache()
+
+    def open_app(self, query: str, desktop_manager=None) -> bool:
+        """
+        Find and launch an application.
+
+        Args:
+            query: Name of the application
+            desktop_manager: Optional desktop manager for isolated launch
+
+        Returns:
+            True if launched successfully
+        """
+        results = self.find_app(query, max_results=1)
+        if not results:
+            self.logger.warning(f"No application found matching '{query}'")
+            return False
+
+        app = results[0]
+        method, cmd = self.get_launch_command(app)
+        self.logger.info(f"Launching {app['name']} via {method}...")
+
+        try:
+            if desktop_manager and desktop_manager.is_created:
+                if method == "executable" or method == "startfile":
+                    return desktop_manager.launch_process(cmd)
+                else:
+                    return desktop_manager.launch_process(f'cmd /c start "" "{app["name"]}"')
+            
+            import subprocess
+            if method == "executable":
+                subprocess.Popen(cmd)
+            elif method == "startfile":
+                os.startfile(cmd)
+            else:
+                os.system(f'start "" "{app["name"]}"')
+            return True
+        except Exception as e:
+            self.logger.error(f"Error launching {app['name']}: {e}")
+            return False
 
     def __repr__(self):
         return f"AppIndexer({len(self.index)} apps indexed)"

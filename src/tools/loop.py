@@ -1,17 +1,20 @@
 import json
+import logging
 import hashlib
 from collections import deque
 import imagehash
 from typing import Any, Dict, List, Optional
 from PIL import Image
 from agent.brain import get_model
+from agent.prompts import LOOP_DEBUG_PROMPT
 
 
 class LoopDetector:
     """
     Detects when the AI agent is stuck in a loop repeating the same actions.
-    Uses action tracking and screen state hashing to identify repetitive patterns.
     """
+    
+    logger = logging.getLogger("pixelpilot.loop")
 
     def __init__(self, threshold: int = 3, similarity_threshold: float = 0.95):
         """
@@ -48,7 +51,7 @@ class LoopDetector:
             phash = imagehash.phash(img, hash_size=16)
             return str(phash)
         except Exception as e:
-            print(f"Warning: Could not hash screen: {e}")
+            self.logger.warning(f"Warning: Could not hash screen: {e}")
 
             with open(screenshot_path, "rb") as f:
                 return hashlib.md5(f.read()).hexdigest()
@@ -210,28 +213,14 @@ class LoopDetector:
             return []
 
         try:
-            prompt = f"""
-You are an AI debugging assistant. An AI agent is stuck in a loop trying to complete a task.
-
-USER COMMAND: "{user_command}"
-
-LOOP DETECTED:
-- Pattern: {self.loop_info.get("pattern")}
-- Action being repeated: {current_action.get("action_type")} with params {current_action.get("params")}
-- Reasoning: {current_action.get("reasoning")}
-- Number of repetitions: {self.loop_info.get("count", 0)}
-
-This suggests the current approach isn't working. Provide 3 alternative strategies to accomplish the user's goal.
-
-Return a JSON array of suggestions:
-{{
-    "suggestions": [
-        "Try using keyboard shortcut Win+R to run the application directly",
-        "Search for the application in the system tray instead of Start Menu",
-        "Ask the user for the exact application path"
-    ]
-}}
-"""
+            prompt = LOOP_DEBUG_PROMPT.format(
+                user_command=user_command,
+                pattern=self.loop_info.get("pattern"),
+                action_type=current_action.get("action_type"),
+                params=current_action.get("params"),
+                reasoning=current_action.get("reasoning"),
+                count=self.loop_info.get("count", 0),
+            )
 
             model = get_model()
             response = model.generate_content(
@@ -249,7 +238,7 @@ Return a JSON array of suggestions:
             return result.get("suggestions", [])
 
         except Exception as e:
-            print(f"Error generating loop alternatives: {e}")
+            self.logger.error(f"Error generating loop alternatives: {e}")
 
             return [
                 "Try a different approach to accomplish the same goal",

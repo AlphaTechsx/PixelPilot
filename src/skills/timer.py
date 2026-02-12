@@ -1,10 +1,15 @@
+from .base import BaseSkill
 import os
 
 
-class TimerSkill:
+class TimerSkill(BaseSkill):
+    name = "Timer"
+
     def __init__(self):
-        self.enabled = True
-        print("Timer Skill: Enabled (Windows Clock)")
+        super().__init__()
+        self.register_method("timer", self.open_timer)
+        self.register_method("alarm", self.open_alarm)
+        self.register_method("stopwatch", self.open_stopwatch)
 
     def open_timer(self, desktop_manager=None):
         try:

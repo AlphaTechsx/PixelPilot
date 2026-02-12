@@ -8,6 +8,7 @@ from PySide6.QtGui import QPixmap, QShortcut, QKeySequence, QPainter, QColor
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtSvg import QSvgRenderer
 from dotenv import load_dotenv
+from config import Config
 
 load_dotenv()
 
@@ -109,12 +110,12 @@ def _install_qt_message_router(logger: logging.Logger):
 def main():
     app = QApplication(sys.argv)
 
-    # Require login before proceeding
     from ui.login_dialog import require_login
-
-    if not require_login():
-        print("Login cancelled. Exiting.")
-        sys.exit(0)
+    
+    if not Config.USE_DIRECT_API:
+        if not require_login():
+            print("Login cancelled. Exiting.")
+            sys.exit(0)
     logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.ico")
     if not os.path.exists(logo_path):
         logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.svg")
@@ -216,6 +217,7 @@ def main():
         from auth_manager import get_auth_manager
         from ui.login_dialog import LoginDialog
 
+        Config.clear_api_key()
         get_auth_manager().logout()
         window.hide()
 
@@ -300,8 +302,7 @@ def main():
     window.show()
     if splash:
         splash.finish(window)
-        
-    logger.debug("Pixel Pilot GUI shown")
+        logging.getLogger("pixelpilot.agent").debug("Pixel Pilot GUI shown")
     app.aboutToQuit.connect(controller.shutdown)
     sys.exit(app.exec())
 if __name__ == "__main__":
