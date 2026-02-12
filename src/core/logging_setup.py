@@ -32,7 +32,6 @@ class BufferingGuiHandler(logging.Handler):
             if msg:
                 self.lines.append((record.levelno, msg))
         except Exception:
-            # Never crash app due to logging
             pass
 
 
@@ -53,8 +52,6 @@ class GuiLogHandler(logging.Handler):
 
             low = text.lower()
 
-            # Internal automation/vision diagnostics should never show in the main chat.
-            # Keep them in file logs, but route to the Thinking channel (which is already filtered/summarized).
             internal_activity_markers = (
                 "taking screenshot",
                 "screenshot attempt",
@@ -69,15 +66,12 @@ class GuiLogHandler(logging.Handler):
                 self.adapter.add_activity_message(text)
                 return
 
-            # Promote model reply traces to the main chat as the final answer.
             if "[reply]" in low:
-                # Examples: "[REPLY]: hello" or "   [REPLY]: hello"
                 reply = text
                 idx = reply.lower().find("[reply]")
                 if idx >= 0:
                     reply = reply[idx + len("[reply]"):].lstrip(" :\t")
                 if reply:
-                    # Final assistant answer: stream it in the UI.
                     add_final = getattr(self.adapter, "add_final_answer", None)
                     if callable(add_final):
                         add_final(reply)
@@ -85,7 +79,6 @@ class GuiLogHandler(logging.Handler):
                         self.adapter.add_system_message(reply)
                 return
 
-            # Route debug planning/step output into the Details panel only.
             if record.levelno == logging.DEBUG:
                 activity_markers = (
                     "executing:",
@@ -125,7 +118,6 @@ class GuiNoiseFilter(logging.Filter):
         "QFont::setPointSize: Point size <= 0",
     )
 
-    # Internal implementation details we do not want to expose in the GUI.
     _HIDE_INTERNAL_SUBSTRINGS = (
         "blind mode",
         "[blind]",
@@ -142,16 +134,12 @@ class GuiNoiseFilter(logging.Filter):
 
         low = str(msg).lower()
 
-        # Always show errors.
         if record.levelno >= logging.ERROR:
             return True
 
-        # Hide internal mode/vision plumbing from the GUI.
         if any(s in low for s in self._HIDE_INTERNAL_SUBSTRINGS):
             return False
 
-        # The agent already posts user-friendly system messages via GuiAdapter.
-        # Avoid duplicating them as plain output log lines.
         if getattr(record, "name", "").startswith("pixelpilot.agent") and record.levelno < logging.WARNING:
             return False
 
@@ -159,7 +147,6 @@ class GuiNoiseFilter(logging.Filter):
 
 
 def _repo_root_from_src() -> str:
-    # src/core/logging_setup.py -> src/core -> src -> repo root
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
@@ -179,7 +166,6 @@ def configure_logging(*, adapter=None) -> tuple[logging.Logger, Optional[Bufferi
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 
-    # Reset handlers to avoid duplicate logs when relaunching in the same process.
     for h in list(logger.handlers):
         logger.removeHandler(h)
 
@@ -217,7 +203,6 @@ def configure_logging(*, adapter=None) -> tuple[logging.Logger, Optional[Bufferi
 def attach_gui_logging(logger: logging.Logger, adapter, buffering: Optional[BufferingGuiHandler]) -> None:
     """Attach GUI handler and flush buffered GUI lines."""
 
-    # Remove the buffering handler if present.
     if buffering is not None:
         try:
             logger.removeHandler(buffering)

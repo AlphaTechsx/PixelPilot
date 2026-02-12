@@ -239,11 +239,18 @@ class ChatWidget(QWidget):
         self.guidance_btn.setFixedSize(110, 32)
         self.guidance_btn.setVisible(False)
 
+        self.continue_btn = QPushButton("Continue")
+        self.continue_btn.setObjectName("continueBtn")
+        self.continue_btn.setFixedSize(110, 32)
+        self.continue_btn.setVisible(False)
+        self.continue_btn.clicked.connect(self._on_continue_btn_clicked)
+
         button_row = QWidget()
         b = QHBoxLayout(button_row)
         b.setContentsMargins(0, 0, 0, 0)
         b.setSpacing(0)
         b.addStretch()
+        b.addWidget(self.continue_btn)
         b.addWidget(self.guidance_btn)
         g.addWidget(button_row)
         self.guidance_bar.setVisible(False)
@@ -393,6 +400,16 @@ class ChatWidget(QWidget):
             }
             QPushButton#guidanceBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0284C7, stop:1 #0EA5E9); border-color: #7DD3FC; }
             QPushButton#guidanceBtn:pressed { background: #0369A1; border-color: #0284C7; }
+            QPushButton#continueBtn {
+                background: transparent;
+                color: #9fd0ff;
+                border: 2px solid #234e6e;
+                border-radius: 8px;
+                font: 600 13px 'Segoe UI', 'Inter', sans-serif;
+                padding: 4px 12px;
+            }
+            QPushButton#continueBtn:hover { background: rgba(35, 78, 110, 50); border-color: #38BDF8; color: #ffffff; }
+            QPushButton#continueBtn:pressed { background: rgba(35, 78, 110, 100); border-color: #0284C7; }
         """)
 
     def _on_anchor_clicked(self, url: QUrl):
@@ -1189,6 +1206,7 @@ class ChatWidget(QWidget):
                 else:
                     self.guidance_bar.hide()
                     self.guidance_btn.hide()
+                    self.continue_btn.hide()
                 self.voice_visualizer.hide()
                 self.voice_visualizer.set_active(False)
                 self.compact_stop_btn.hide()
@@ -1211,6 +1229,7 @@ class ChatWidget(QWidget):
         else:
             self.guidance_bar.hide()
             self.guidance_btn.hide()
+            self.continue_btn.hide()
         if listening:
             self.voice_visualizer.show()
             self.voice_visualizer.set_active(True)
@@ -1251,6 +1270,7 @@ class ChatWidget(QWidget):
         self._guidance_active = False
         self.guidance_bar.hide()
         self.guidance_btn.hide()
+        self.continue_btn.hide()
         self._apply_view_mode()
 
     def show_guidance_input(self, payload: dict):
@@ -1268,6 +1288,12 @@ class ChatWidget(QWidget):
             self.input_field.setPlaceholderText("> Type 'done', ask a question, or describe what happened...")
         self.guidance_btn.setText(label)
         self.guidance_btn.setEnabled(True)
+        
+        if payload.get("show_continue"):
+            self.continue_btn.show()
+        else:
+            self.continue_btn.hide()
+            
         self.guidance_bar.show()
         self.guidance_btn.show()
         self._apply_view_mode()
@@ -1281,6 +1307,7 @@ class ChatWidget(QWidget):
             self._mark_last_guidance_step_completed()
             self.guidance_bar.hide()
             self.guidance_btn.hide()
+            self.continue_btn.hide()
             self.input_field.setPlaceholderText("> Type a command...")
             # Set "done" as the default input when clicking Next
             self._start_turn()
@@ -1302,5 +1329,23 @@ class ChatWidget(QWidget):
             self.add_activity_message("Planning next step...")
             payload["result"] = True
             payload["event"].set()
+
+    def _on_continue_btn_clicked(self):
+        """Handle continue button click."""
+        if self._guidance_input_active and isinstance(self._guidance_input_payload, dict):
+            payload = self._guidance_input_payload
+            self._guidance_input_payload = None
+            self._guidance_input_active = False
+            self._mark_last_guidance_step_completed()
+            self.guidance_bar.hide()
+            self.guidance_btn.hide()
+            self.continue_btn.hide()
+            self.input_field.setPlaceholderText("> Type a command...")
+            
+            self._start_turn()
+            self.add_activity_message("Continuing task...")
+            payload["feedback"] = "no"
+            if payload.get("event"):
+                payload["event"].set()
 
 

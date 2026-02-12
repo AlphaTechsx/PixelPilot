@@ -182,28 +182,22 @@ class GuidanceSession:
             
             if goal_status and goal_status.complete and goal_status.confidence > 0.85:
                 self._send_message(f"It looks like the goal might be complete: {goal_status.reason}.")
-                self._send_message(f"If you are finished, type 'Yes' and click Done. If you need to do more, click 'Continue'.")
+                self._send_message(f"If you are finished, click Done. If you need to do more, click Continue.")
                 
-                conf_msg, conf_proceed = self._wait_for_user(label="Continue")
+                conf_msg, conf_proceed = self._wait_for_user(label="Done", show_continue=True)
                 
                 if not conf_proceed:
                     return "stopped"
                 
-                if not conf_msg:
+                if conf_msg == "no":
                     self._log("User clicked Continue (Goal not done)")
                     self._send_message("Okay, let's keep working.")
                     return "continue"
-
-                conf_intent = self._classify_confirmation(conf_msg)
-                if conf_intent == "yes":
+                
+                if conf_msg and conf_msg.lower() == "done":
                     self.completed_steps.append(self.current_instruction or "Previous step")
                     self._send_message(f"Great job! Goal completed.")
-                    self._wait_for_user_ack("Done")
                     return "complete"
-                elif conf_intent == "no":
-                    self._send_message("Okay, let's continue then.")
-                else:
-                    self._send_message("Okay, let's continue then.")
             
             if self.current_instruction:
                 verification = self._verify_step(elements)
@@ -450,7 +444,7 @@ class GuidanceSession:
         except Exception:
             return None
     
-    def _wait_for_user(self, label: str = "Next") -> Tuple[Optional[str], bool]:
+    def _wait_for_user(self, label: str = "Next", show_continue: bool = False) -> Tuple[Optional[str], bool]:
         """
         Wait for user input.
         
@@ -471,6 +465,7 @@ class GuidanceSession:
             "event": threading.Event(),
             "feedback": None,
             "label": label,
+            "show_continue": show_continue,
             "final": False,
             "steps": {
                 "done": list(self.completed_steps),

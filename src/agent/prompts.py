@@ -529,3 +529,17 @@ Current screen shows:
 Give them helpful troubleshooting advice or an alternative approach. Be encouraging and specific."""
 
 
+CONFIRMATION_PROMPT = """Analyze the user's response to the question: "Is the goal fully finished?"
+
+USER RESPONSE: "{user_message}"
+
+Determine if the user is confirming (YES) or rejecting (NO).
+
+Categories:
+- "yes" - They agree the goal is done (e.g. "yes", "yep", "I think so", "done", "correct")
+- "no" - They disagree or want to do more (e.g. "no", "nope", "not yet", "wait", "one more thing", "wrong")
+- "uncertain" - They are unsure (e.g. "maybe", "check for me")
+
+Respond with just the category word: "yes", "no", or "uncertain"."""
+
+
