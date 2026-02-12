@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
 import './QuickStart.css';
 import { Magnetic } from './Magnetic';
 
@@ -17,7 +18,7 @@ export const QuickStart = () => {
                     <h2 className="qs-title">INITIALIZATION</h2>
                     <p className="qs-subtitle">Three steps to authority.</p>
                 </div>
-                
+
                 <div className="terminal-window">
                     <div className="terminal-header">
                         <div className="t-dot red" />
@@ -27,7 +28,7 @@ export const QuickStart = () => {
                     </div>
                     <div className="terminal-body">
                         {commands.map((cmd, i) => (
-                            <motion.div 
+                            <motion.div
                                 key={i}
                                 initial={{ opacity: 0, x: -10 }}
                                 whileInView={{ opacity: 1, x: 0 }}
@@ -39,7 +40,7 @@ export const QuickStart = () => {
                                     <span className="prompt">$</span>
                                     <span className="cmd-text">{cmd.text}</span>
                                 </div>
-                                <motion.div 
+                                <motion.div
                                     className="cmd-output"
                                     initial={{ opacity: 0 }}
                                     whileInView={{ opacity: 0.6 }}
@@ -53,9 +54,9 @@ export const QuickStart = () => {
                 </div>
 
                 <div className="qs-actions">
-                   <Magnetic>
-                        <a href="/docs" className="docs-link">Read Full Documentation &rarr;</a>
-                   </Magnetic>
+                    <Magnetic>
+                        <Link to="/docs" className="docs-link">Read Full Documentation &rarr;</Link>
+                    </Magnetic>
                 </div>
             </div>
         </section>

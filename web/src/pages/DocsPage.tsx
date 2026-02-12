@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import './DocsPage.css';
 import { Footer } from '../components/Footer';
 
@@ -46,7 +47,7 @@ export const DocsPage = () => {
                         GenAI SDK with a vision-first automation pipeline and Secure Desktop support.
                     </p>
                     <div className="docs-hero-actions">
-                        <a className="docs-cta primary" href="/">Back to Landing</a>
+                        <Link className="docs-cta primary" to="/">Back to Landing</Link>
                         <a className="docs-cta" href="https://github.com/birukabza/Pixel-Pilot" target="_blank" rel="noreferrer">GitHub</a>
                     </div>
                 </div>
@@ -58,8 +59,8 @@ export const DocsPage = () => {
                         <h2>Install</h2>
                         <p>Run the installer to create the virtual environment and scheduled tasks.</p>
                         <pre>$ git clone https://github.com/birukabza/Pixel-Pilot.git
-$ cd Pixel-Pilot
-$ python install.py</pre>
+                            $ cd Pixel-Pilot
+                            $ python install.py</pre>
                         <div className="docs-note">Optional: <code>python install.py --no-tasks</code></div>
                         <ul>
                             <li>Builds UAC helpers and scheduled tasks.</li>

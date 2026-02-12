@@ -65,11 +65,11 @@ export const Documentation = () => {
                     <article className="doc-card">
                         <h3>Architecture</h3>
                         <ul className="doc-list">
-                            <li>Main app provides UI, planning, and automation.</li>
-                            <li>UAC Orchestrator runs as SYSTEM to access Secure Desktop.</li>
-                            <li>UAC Agent captures and responds to UAC prompts.</li>
-                            <li>Vision pipeline selects between robo and OCR modes.</li>
-                            <li>Optional Agent Desktop isolates background work.</li>
+                            <li><strong>Modular Agent Core</strong>: Decoupled <code>core</code>, <code>actions</code>, and <code>capture</code> modules.</li>
+                            <li><strong>UAC Orchestrator</strong>: SYSTEM-level service for Secure Desktop interaction.</li>
+                            <li><strong>Vision Pipeline</strong>: Dynamic selection between Gemini Robotics-ER and local OCR.</li>
+                            <li><strong>Agent Desktop</strong>: Isolated workspace sandbox for safe background automation.</li>
+                            <li><strong>Interactive-First</strong>: Mandatory blind planning step for workspace decisions.</li>
                         </ul>
                     </article>
 
