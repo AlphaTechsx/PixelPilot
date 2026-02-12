@@ -370,10 +370,18 @@ class ScreenCapture:
             task_context = self.agent.current_task if self.agent.current_task else None
             current_step = None
             if self.agent.task_history:
-                last_action = self.agent.task_history[-1]
-                current_step = (
-                    f"{last_action['action_type']}: {last_action['reasoning']}"
+                last_action = next(
+                    (
+                        h
+                        for h in reversed(self.agent.task_history)
+                        if isinstance(h, dict) and "action_type" in h
+                    ),
+                    None,
                 )
+                if last_action:
+                    current_step = (
+                        f"{last_action['action_type']}: {last_action['reasoning']}"
+                    )
 
             if self.agent.robotics_eye:
                 if Config.ROBOTICS_USE_BOUNDING_BOXES:

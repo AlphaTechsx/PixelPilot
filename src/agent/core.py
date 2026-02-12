@@ -221,10 +221,43 @@ class AgentOrchestrator:
             action, model_part = action_data
             self.log(f"AI Reasoning: {action.get('reasoning', 'N/A')}")
 
+            if self.clarification_manager and self.clarification_manager.should_ask_clarification(action):
+                user_answer = self.clarification_manager.ask_question(action, user_command)
+                if user_answer:
+                    refined_action = self.clarification_manager.integrate_answer(
+                        action, user_answer, user_command
+                    )
+                    if refined_action:
+                        self.log("Action refined based on user feedback.")
+                        action = refined_action
+
             if self.loop_detector and action.get("action_type") != "wait":
                 current_hash = self.screen_capture.last_hash if needs_vision else "blind"
                 if self.loop_detector.track_action(action, current_hash):
                     self.log("LOOP WARNING: Repeating pattern detected!")
+                    
+                    if self.clarification_manager:
+                        suggestions = self.clarification_manager.generate_loop_suggestions(
+                            action, user_command, {"count": self.loop_detector.counter, "pattern": "repeated_action"}
+                        )
+                        
+                        user_help = self.clarification_manager.handle_loop_clarification(
+                            {"count": self.loop_detector.counter, "pattern": "repeated_action"},
+                            user_command,
+                            suggestions
+                        )
+                        if user_help:
+                            if user_help.lower() in ["cancel", "stop", "quit"]:
+                                self.log("User requested to stop during loop resolution.")
+                                return False
+                                
+                            action = {
+                                "action_type": "reply",
+                                "params": {"text": f"Understood. I will attempt: {user_help}"},
+                                "reasoning": f"User intervention after loop detection: {user_help}",
+                                "needs_vision": True,
+                                "task_complete": False
+                            }
             
             if action.get("action_type") == "switch_workspace":
                 params = action.get("params", {})

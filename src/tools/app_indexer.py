@@ -406,17 +406,16 @@ class AppIndexer:
                 if method == "executable" or method == "startfile":
                     return desktop_manager.launch_process(cmd)
                 elif method == "modern_app":
-                    return desktop_manager.launch_process(f'explorer.exe shell:AppsFolder\\{cmd}')
+                    return desktop_manager.launch_process(f'powershell -Command "Start-Process shell:AppsFolder\\{cmd}"')
                 else:
                     return desktop_manager.launch_process(f'cmd /c start "" "{app["name"]}"')
-            
             import subprocess
             if method == "executable":
                 subprocess.Popen(cmd)
             elif method == "startfile":
                 os.startfile(cmd)
             elif method == "modern_app":
-                subprocess.Popen(f'explorer.exe shell:AppsFolder\\{cmd}', shell=True)
+                subprocess.Popen(f'powershell -Command "Start-Process shell:AppsFolder\\{cmd}"', shell=True)
             else:
                 os.system(f'start "" "{app["name"]}"')
             return True

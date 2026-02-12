@@ -98,13 +98,18 @@ RESPONSE FORMAT:
 
 CRITICAL GUIDELINES:
 0. **WORKSPACE AWARENESS**: You are currently interacting with the {workspace_section} desktop. Do NOT confuse the "user's desktop" (live environment) with the "agent's desktop" (sandboxed environment). Ensure your actions (like opening apps) happen on the desktop where you intend to work.
-1. **ID Precision**: You MUST use the `element_id` from the [Annotated Screen] or the provided list. Do not hallucinate IDs.
-2. **Launch First**: If the user wants to open an app (e.g., "Open Notepad"), always use `open_app` first. Do not try to find the icon manually unless `open_app` failed previously. **NOTE**: If using `call_skill("browser", "open", ...)`, you do NOT need to call `open_app` for the browser.
+1. **APP PREFERENCE**: ALWAYS prefer opening a real desktop application over a web version.
+   - If user says "Open Telegram", use `open_app("Telegram")` (desktop app), NOT `browser.open("web.telegram.org")`.
+   - If user says "Play Spotify", use `open_app("Spotify")`.
+   - Only use the browser if the user explicitly asks for a website (e.g. "Open Gmail.com") or if the "app" is known to be web-only.
+2. **ID Precision**: You MUST use the `element_id` from the [Annotated Screen] or the provided list. Do not hallucinate IDs.
+3. **Launch First**: If the user wants to open an app (e.g., "Open Notepad"), always use `open_app` first. Do not try to find the icon manually unless `open_app` failed previously. **NOTE**: If using `call_skill("browser", "open", ...)`, you do NOT need to call `open_app` for the browser.
 3. **Verification**: Set `task_complete` to true ONLY if you are sure the user's goal is fully achieved.
 4. **Efficiency**: For trivial actions (like 'reply', 'wait', or simple confirmations) where a screenshot verification is overkill, SET `skip_verification: true`.
 5. **Magnification**: If you cannot see an element clearly or the text is too small, use `magnify` on the approximate area.
 6. **Robotics Fallback**: If OCR is failing to find an icon, mention "requesting robotics fallback" in your reasoning.
-7. **Blind Mode Switching**: If you are entering a phase where you don't need to see the screen (e.g. typing a long text, waiting, or using skills/hotkeys), SET `needs_vision: false`. This will make the agent run faster by skipping screenshots for the next step.
+7. **Blind Mode Switching**: If you are entering a phase where you don't need to see the screen (e.g. typing a long text, waiting, or using skills/hotkeys), SET `needs_vision: false`.
+8. **ASK FOR HELP**: If you are stuck (e.g., CAPTCHA, 2FA, Login Screen, missing info), set `clarification_needed: true` and provide a `clarification_question`. Do NOT just reply saying you can't do it. Ask the user to solve the blocker (e.g. "Please log in").
 """
 
 PLAN_TASK_BLIND_PROMPT = """
@@ -161,9 +166,11 @@ RESPONSE RULES:
 - Default to Vision: If in doubt, set `needs_vision: true`.
 - If the task is "Play music", use call_skill("media", "play", ...).
 - If the task is "Open Notepad", use open_app("Notepad").
+- **APP PREFERENCE**: If the task is "Open Telegram/Spotify/Discord", use `open_app("Telegram")` etc. Do NOT use `call_skill("browser", ...)` unless explicitly asked for the web version.
 - If the task is "Click the Submit button", set `needs_vision: true`.
 - If the task is "What is on my screen?", set `needs_vision: true`.
 - When using `reply`, ALWAYS put the answer in `params.text` (not `message`).
+- **ASK FOR HELP**: If you get stuck or need user input (e.g. "What is the password?"), set `clarification_needed: true` and provide a `clarification_question`.
 
 RESPONSE FORMAT:
 {{
@@ -192,8 +199,11 @@ Analyze the command and decide:
 DEEP SITUATIONAL LOGIC:
 - **Web & Browsing**: If the user says "Open Gmail", "Search for recipes", or "What's the latest news", use the AGENT workspace. It provides a clean, isolated browser.
 - **CLI & Background**: Use the AGENT workspace for `pip install`, `git clone`, or checking system specs.
+- **Communication**: If the user says "Message X on Telegram/Discord/Slack", assume they want the DESKTOP APP.
+  - If the app is likely on the user's main PC, use USER workspace.
+  - If you are unsure, USER workspace is safer for installed apps.
+  - ONLY use AGENT workspace if it's clearly a web-based task or if the user says "Telegram Web".
 - **Personal Content**: ONLY use the USER workspace if the command implies a local necessity: "Read my budget.xlsx", "Fix the formatting in the Word document I have open", or "Move these folders on my desktop".
-- **Communication Transition**: If told to "Search X and send to Y via Telegram", the search part is AGENT (browsing). If Telegram is a web app, stay in AGENT. Only use USER if the user implies a specific desktop app already in use.
 - **Privacy & Cleanliness**: Favor AGENT for anything that involves logging into temporary sessions (browsing) or running scripts, to keep the user's main desktop uncluttered and secure.
 - **Local Media/Settings**: Use USER for "Turn up my volume", "Lock my PC", or "Open my Pictures folder".
 

@@ -8,6 +8,7 @@ from config import Config, OperationMode
 from agent.prompts import (
     GENERATE_CLARIFICATION_QUESTION_PROMPT,
     INTEGRATE_CLARIFICATION_ANSWER_PROMPT,
+    LOOP_DEBUG_PROMPT,
 )
 
 
@@ -18,7 +19,7 @@ class ClarificationQuestion(BaseModel):
 
 class RefinedAction(BaseModel):
     action_type: str = Field(description="The corrected action type")
-    params: Dict[str, Any] = Field(description="Updated action parameters")
+    params: str = Field(description="Updated action parameters as a JSON string")
     reasoning: str = Field(description="Updated reasoning based on user feedback")
     confidence: float = Field(
         default=1.0, description="Confidence score (set to 1.0 after user confirmation)"
@@ -167,14 +168,14 @@ class ClarificationManager:
 
             model = get_model()
             response = model.generate_content(
-                [prompt],
+                [{"role": "user", "parts": [{"text": prompt}]}],
                 config={
                     "response_mime_type": "application/json",
                     "response_json_schema": ClarificationQuestion.model_json_schema(),
                 },
             )
 
-            result = ClarificationQuestion.model_validate_json(response.text)
+            result = ClarificationQuestion.model_validate_json(response["text"])
             question = result.question
             options = result.options or []
 
@@ -222,20 +223,77 @@ class ClarificationManager:
 
             model = get_model()
             response = model.generate_content(
-                [prompt],
+                [{"role": "user", "parts": [{"text": prompt}]}],
                 config={
                     "response_mime_type": "application/json",
                     "response_json_schema": RefinedAction.model_json_schema(),
                 },
             )
 
-            return RefinedAction.model_validate_json(response.text).model_dump()
+            refined_action = RefinedAction.model_validate_json(response["text"])
+            
+            params_dict = {}
+            if refined_action.params:
+                try:
+                    params_dict = json.loads(refined_action.params)
+                except json.JSONDecodeError:
+                    self.logger.warning(f"Failed to parse params JSON: {refined_action.params}")
+                    params_dict = {}
+
+            result = refined_action.model_dump()
+            result["params"] = params_dict
+            return result
 
         except Exception as e:
             self.logger.error(f"Error integrating clarification answer: {e}")
 
             action["clarification_needed"] = False
             return action
+
+        return None
+
+    def generate_loop_suggestions(
+        self, action: Dict[str, Any], user_command: str, loop_info: Dict
+    ) -> List[str]:
+        """
+        Generate context-aware suggestions for breaking a loop using the LLM.
+
+        Args:
+            action: The recurring action
+            user_command: The user's original goal
+            loop_info: Details about the loop (count, pattern)
+
+        Returns:
+            List of suggestion strings
+        """
+        try:
+            prompt = LOOP_DEBUG_PROMPT.format(
+                user_command=user_command,
+                pattern=loop_info.get("pattern", "unknown"),
+                action_type=action.get("action_type", "unknown"),
+                params=action.get("params", {}),
+                reasoning=action.get("reasoning", ""),
+                count=loop_info.get("count", 0),
+            )
+
+            model = get_model()
+            response = model.generate_content(
+                [{"role": "user", "parts": [{"text": prompt}]}],
+                config={
+                    "response_mime_type": "application/json",
+                },
+            )
+            
+            data = json.loads(response["text"])
+            return data.get("suggestions", [])
+
+        except Exception as e:
+            self.logger.error(f"Error generating loop suggestions: {e}")
+            return [
+                "Try a different approach",
+                "Force a manual step",
+                "Stop and ask the user"
+            ]
 
     def handle_loop_clarification(
         self, loop_info: Dict, user_command: str, suggestions: List[str]

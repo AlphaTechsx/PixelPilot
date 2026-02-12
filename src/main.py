@@ -177,12 +177,14 @@ def main():
         if relaunch_as_admin():
             return
 
-        QMessageBox.warning(
+        from ui.custom_dialogs import MessageDialog
+        dialog = MessageDialog(
             None,
             "Administrator Privileges",
             "Pixel Pilot is running without Administrator privileges.\n\n"
             "Some desktop automation features may be limited.",
         )
+        dialog.exec()
 
     window = MainWindow()
     

@@ -61,10 +61,17 @@ class GatewayServer:
                     
                     last_output = "Task completed."
                     if self.agent.task_history:
-                        last_action = self.agent.task_history[-1]
+                        last_action = next(
+                            (
+                                h
+                                for h in reversed(self.agent.task_history)
+                                if isinstance(h, dict) and "action_type" in h
+                            ),
+                            {},
+                        )
                         if last_action.get("action_type") == "reply":
                             last_output = last_action.get("params", {}).get("text", "")
-                        else:
+                        elif last_action:
                             last_output = last_action.get("reasoning", str(last_action))
 
                     response = {

@@ -7,6 +7,7 @@ from agent.core import AgentOrchestrator
 from config import Config, OperationMode
 from tools.eye import GeminiRoboticsEye
 from backend_client import RateLimitError
+from ui.custom_dialogs import ClarificationDialog, ConfirmationDialog
 
 logger = logging.getLogger("pixelpilot.controller")
 
@@ -123,15 +124,16 @@ class MainController(QObject):
 
     @Slot(str, str, object)
     def handle_confirmation(self, title, text, payload):
-        res = QMessageBox.question(self.main_window, title, text, QMessageBox.Yes | QMessageBox.No)
-        payload['result'] = (res == QMessageBox.Yes)
+        dialog = ConfirmationDialog(self.main_window, title, text)
+        result = dialog.exec()
+        payload['result'] = (result == QDialog.DialogCode.Accepted)
         payload['event'].set()
 
     @Slot(str, str, object)
     def handle_input(self, title, question, payload):
-        text, ok = QInputDialog.getText(self.main_window, title, question)
-        if ok:
-            payload['result'] = text
+        dialog = ClarificationDialog(self.main_window, title, question)
+        if dialog.exec():
+            payload['result'] = dialog.get_text()
         else:
             payload['result'] = None
         payload['event'].set()
