@@ -15,6 +15,7 @@ from skills import MediaSkill, BrowserSkill, SystemSkill, TimerSkill
 from tools.mouse import click_at
 from agent.actions import ActionExecutor
 from agent.capture import ScreenCapture
+from agent.guidance import GuidanceSession
 
 class StopRequested(Exception):
     pass
@@ -102,6 +103,11 @@ class AgentOrchestrator:
     def request_stop(self):
         self._stop_event.set()
 
+    def set_mode(self, mode):
+        """Update the operation mode."""
+        self.mode = mode
+        self.log(f"Mode changed to {mode.value.upper()}")
+
     def _check_stop(self):
         if self._stop_event.is_set():
             raise StopRequested()
@@ -133,6 +139,16 @@ class AgentOrchestrator:
         self.zoom_center = None
 
         self.log(f"Starting task: {user_command}")
+
+        if self.mode == OperationMode.GUIDE:
+            self.log("Entering GUIDANCE mode (Interactive Tutorial)")
+            session = GuidanceSession(
+                user_goal=user_command,
+                chat_window=self.chat_window,
+                capture_func=self.capture_screen,
+                stop_check_func=self._check_stop
+            )
+            return session.run()
 
         while self.step_count < self.max_steps:
             self._check_stop()

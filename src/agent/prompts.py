@@ -43,8 +43,6 @@ FIRST-STEP WORKSPACE DECISION:
 - If a switch is needed, output ONLY `switch_workspace` as the action with `needs_vision: false`.
 - After switching, you can request vision on the next step if required.
 
-{guidance_section}
-
 AVAILABLE SKILLS (HYBRID MODE):
 - The agent has "Skills" that use APIs instead of UI interaction. Use them PREFERENTIALLY for reliability.
 - Skill: "media" (or "spotify")

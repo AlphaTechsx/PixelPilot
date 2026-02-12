@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 from pydantic import BaseModel, Field
 
-from agent.brain import get_model
+from agent.brain import get_model, pil_to_dict
 from agent.prompts import (
     INSTRUCTION_PROMPT,
     CLARIFICATION_PROMPT,
@@ -239,16 +239,17 @@ class GuidanceSession:
         )
         
         try:
-            contents = [prompt]
+            parts = [{"text": prompt}]
             if self._last_screenshot_path:
                 try:
                     img = Image.open(self._last_screenshot_path)
-                    contents.append(img)
+                    parts.append(pil_to_dict(img))
                 except Exception:
                     pass
             
+            contents = [{"role": "user", "parts": parts}]
             response = self.model.generate_content(contents)
-            instruction = response.text.strip()
+            instruction = response["text"].strip()
             
             instruction = instruction.replace("**", "").strip()
             
@@ -275,7 +276,7 @@ class GuidanceSession:
         
         try:
             response = self.model.generate_content([prompt])
-            intent = response.text.strip().lower()
+            intent = response["text"].strip().lower()
             
             if intent in ("next", "question", "problem", "stop", "repeat"):
                 return intent
@@ -295,16 +296,17 @@ class GuidanceSession:
         )
         
         try:
-            contents = [prompt]
+            parts = [{"text": prompt}]
             if self._last_screenshot_path:
                 try:
                     img = Image.open(self._last_screenshot_path)
-                    contents.append(img)
+                    parts.append(pil_to_dict(img))
                 except Exception:
                     pass
             
+            contents = [{"role": "user", "parts": parts}]
             response = self.model.generate_content(contents)
-            return response.text.strip()
+            return response["text"].strip()
             
         except Exception as e:
             logger.exception("Failed to answer question")
@@ -322,16 +324,17 @@ class GuidanceSession:
         )
         
         try:
-            contents = [prompt]
+            parts = [{"text": prompt}]
             if self._last_screenshot_path:
                 try:
                     img = Image.open(self._last_screenshot_path)
-                    contents.append(img)
+                    parts.append(pil_to_dict(img))
                 except Exception:
                     pass
             
+            contents = [{"role": "user", "parts": parts}]
             response = self.model.generate_content(contents)
-            return response.text.strip()
+            return response["text"].strip()
             
         except Exception:
             return "I see there's an issue. Can you tell me more about what happened? Or we can try a different approach."
@@ -356,14 +359,15 @@ class GuidanceSession:
         )
         
         try:
-            contents = [prompt]
+            parts = [{"text": prompt}]
             if self._last_screenshot_path:
                 try:
                     img = Image.open(self._last_screenshot_path)
-                    contents.append(img)
+                    parts.append(pil_to_dict(img))
                 except Exception:
                     pass
             
+            contents = [{"role": "user", "parts": parts}]
             response = self.model.generate_content(
                 contents,
                 config={
@@ -372,11 +376,10 @@ class GuidanceSession:
                 },
             )
             
-            return VerificationResult.model_validate_json(response.text)
+            return VerificationResult.model_validate_json(response["text"])
             
         except Exception as e:
             logger.exception("Verification failed")
-            # Assume success on verification failure
             return VerificationResult(
                 success=True,
                 confidence=0.3,
@@ -394,14 +397,15 @@ class GuidanceSession:
         )
         
         try:
-            contents = [prompt]
+            parts = [{"text": prompt}]
             if self._last_screenshot_path:
                 try:
                     img = Image.open(self._last_screenshot_path)
-                    contents.append(img)
+                    parts.append(pil_to_dict(img))
                 except Exception:
                     pass
             
+            contents = [{"role": "user", "parts": parts}]
             response = self.model.generate_content(
                 contents,
                 config={
@@ -410,7 +414,7 @@ class GuidanceSession:
                 },
             )
             
-            return GoalStatus.model_validate_json(response.text)
+            return GoalStatus.model_validate_json(response["text"])
             
         except Exception:
             return None
@@ -423,14 +427,12 @@ class GuidanceSession:
             (message, should_proceed) - message is None if cancelled
         """
         if not self.chat_window:
-            # CLI fallback
             try:
                 msg = input("Your response (or 'stop' to cancel): ").strip()
                 return msg, bool(msg)
             except (EOFError, KeyboardInterrupt):
                 return None, False
         
-        # GUI mode - wait for guidance response
         import threading
         
         payload = {
@@ -514,7 +516,6 @@ class GuidanceSession:
             label = el.get("label", "")
             x, y = el.get("x", 0), el.get("y", 0)
             
-            # Add position hint
             pos = self._position_hint(x, y)
             
             if label:
@@ -536,7 +537,6 @@ class GuidanceSession:
     
     def _position_hint(self, x: float, y: float) -> str:
         """Get a human-readable position hint."""
-        # Assume 1920x1080 as default
         width, height = 1920, 1080
         
         x_ratio = x / float(width) if width else 0.5

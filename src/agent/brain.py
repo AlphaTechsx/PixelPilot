@@ -134,7 +134,7 @@ class PlannedAction(BaseModel):
     )
 
 
-def _pil_to_dict(img: Image.Image) -> Dict[str, str]:
+def pil_to_dict(img: Image.Image) -> Dict[str, str]:
     img_byte_arr = io.BytesIO()
     img.save(img_byte_arr, format="PNG")
     return {
@@ -199,17 +199,6 @@ def plan_task(
     agent_desktop_section = (
         "AGENT DESKTOP AVAILABLE: YES" if agent_desktop_available else "AGENT DESKTOP AVAILABLE: NO"
     )
-    guidance_section = ""
-    if guidance_mode:
-        guidance_section = """
-GUIDANCE MODE (HUMAN-FOLLOWING):
-- Prefer manual steps a human can do: open_app, press_key, key_combo, click, type_text.
-- Avoid call_skill unless no UI path exists.
-- Prefer clicks on OCR text elements that match the user's words (e.g., "Chrome", "Settings", "Search").
-- If a label is visible in OCR, choose that element_id instead of a generic control.
-- Do not output generic actions like "open system controls" when a specific OCR label exists.
-"""
-
     prompt_text = PLAN_TASK_PROMPT.format(
         turbo_status=turbo_status,
         user_command=user_command,
@@ -217,8 +206,7 @@ GUIDANCE MODE (HUMAN-FOLLOWING):
         mag_section=mag_section,
         workspace_section=workspace_section,
         agent_desktop_section=agent_desktop_section,
-        elements_str=elements_str,
-        guidance_section=guidance_section
+        elements_str=elements_str
     )
 
     contents = [
@@ -226,13 +214,13 @@ GUIDANCE MODE (HUMAN-FOLLOWING):
             "role": "user",
             "parts": [
                 {"text": prompt_text},
-                _pil_to_dict(clean_image),
-                _pil_to_dict(annotated_image),
+                pil_to_dict(clean_image),
+                pil_to_dict(annotated_image),
             ],
         }
     ]
     if reference_sheet:
-        contents[0]["parts"].append(_pil_to_dict(reference_sheet))
+        contents[0]["parts"].append(pil_to_dict(reference_sheet))
 
     contents_to_send = _normalize_history(history)
     contents_to_send.append(contents[0])
