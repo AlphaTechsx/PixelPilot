@@ -3,6 +3,7 @@ import logging
 import os
 import re
 import winreg
+import subprocess
 import psutil
 import difflib
 from datetime import datetime, timedelta
@@ -84,6 +85,7 @@ class AppIndexer:
             self._index_running_processes()
 
         self._index_registry()
+        self._index_modern_apps()
 
         self.logger.info(f"App index built: {len(self.index)} applications found")
 
@@ -204,6 +206,33 @@ class AppIndexer:
                             break
             except Exception:
                 pass
+
+    def _index_modern_apps(self):
+        """Index modern Windows Store apps using PowerShell."""
+        try:
+            cmd = ["powershell", "-Command", "Get-StartApps | ConvertTo-Json"]
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT)
+            apps = json.loads(output)
+            
+            for app in apps:
+                name = app.get("Name", "")
+                appid = app.get("AppID", "")
+                
+                if not name or not appid:
+                    continue
+                    
+                clean_name = name.lower()
+                
+                if clean_name not in self.index:
+                    self.index[clean_name] = {
+                        "name": name,
+                        "path": appid,
+                        "type": "modern_app",
+                        "launch_method": "modern_app",
+                        "search_terms": self._generate_search_terms(name),
+                    }
+        except Exception as e:
+            self.logger.error(f"Error indexing modern apps: {e}")
 
     def _index_program_files(self):
         """
@@ -330,7 +359,7 @@ class AppIndexer:
         """
         launch_method = app_info.get("launch_method", "start_menu")
 
-        if launch_method == "executable" or launch_method == "startfile":
+        if launch_method == "executable" or launch_method == "startfile" or launch_method == "modern_app":
             return (launch_method, app_info.get("path", ""))
         else:
             return ("start_menu", app_info.get("name", ""))
@@ -376,6 +405,8 @@ class AppIndexer:
             if desktop_manager and desktop_manager.is_created:
                 if method == "executable" or method == "startfile":
                     return desktop_manager.launch_process(cmd)
+                elif method == "modern_app":
+                    return desktop_manager.launch_process(f'explorer.exe shell:AppsFolder\\{cmd}')
                 else:
                     return desktop_manager.launch_process(f'cmd /c start "" "{app["name"]}"')
             
@@ -384,6 +415,8 @@ class AppIndexer:
                 subprocess.Popen(cmd)
             elif method == "startfile":
                 os.startfile(cmd)
+            elif method == "modern_app":
+                subprocess.Popen(f'explorer.exe shell:AppsFolder\\{cmd}', shell=True)
             else:
                 os.system(f'start "" "{app["name"]}"')
             return True
