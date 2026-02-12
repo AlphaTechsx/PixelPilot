@@ -16,17 +16,18 @@ PixelPilot is a high-performance Windows desktop automation agent powered by **G
 
 ### 🚀 Hybrid Planning & Execution
 - **Turbo Mode (Enabled by Default)**: Optimizes planning by batching multiple stable actions into a single execution sequence.
-- **Blind Mode**: The agent can plan and act without screenshots (using OS skills and hotkeys) when visual context is not required, automatically switching back to vision when needed.
+- **Blind Mode**: The agent can plan and act without screenshots (using OS skills and hotkeys) when visual context is not required.
+- **Interactive-First Planning**: Every task starts with a "Blind Step 1" to intelligently decide on the workspace (User vs Agent) before triggering vision.
+- **Task Verification & Deferred Replies**: Performs optional screen analysis to confirm success. Replies are buffered and only displayed after verification is complete.
 
 ### 👁️ Advanced Vision System
 - **Lazy Vision Pipeline**: Implements a tiered approach—tries lightweight local OCR (EasyOCR + OpenCV) (default) first and **Gemini Robotics-ER** for complex semantic understanding or unknown icons.
 - **Incremental Screenshots**: Only captures and analyzes new screenshots when the screen state has changed, significantly reducing API latency.
-- **Dynamic Resolution**: Automatically requests high-resolution media from the brain when magnification is active or confidence is low.
-- **Magnification & Reference Sheets**: Zoom into dense UI regions and use visual coordinate reference sheets to solve small-element ambiguity.
 
 ### 🖥️ Desktop Orchestration
-- **Agent Desktop (Isolated Workspaces)**: Create and switch between the live `user` desktop and an isolated `agent` desktop for background tasks.
-- **Sidecar Preview**: A high-performance, read-only live preview (supporting up to 30 FPS) of the Agent Desktop attached to the main UI.
+- **Agent Desktop (Isolated Workspaces)**: Seamlessly switch between the live `user` desktop and an isolated `agent` desktop.
+- **Situational Logic**: Automatically favors the Agent Desktop for generic web tasks (browsing, research, Gmail, CLI) while reserving the User Desktop for local file interaction.
+- **Sidecar Preview**: A high-performance, live preview of the Agent Desktop.
 
 ### 🛡️ System Integration & Security
 - **UAC / Secure Desktop Support**: A dedicated SYSTEM service (UAC Orchestrator) allows the agent to see and interact with Secure Desktop prompts.
@@ -121,32 +122,27 @@ Notes:
 
 ## Architecture
 
-PixelPilot uses a multi-process architecture to bridge userland automation and Secure Desktop.
+PixelPilot uses a modular, multi-process architecture to bridge userland automation and Secure Desktop.
 
-1. **Main App ([src/main.py](src/main.py))**
-     - Runs in the user session.
+1. **Modular Agent Core (`src/agent/`)**
+     - **Core Orchestrator ([core.py](src/agent/core.py))**: Manages the main task loop, workspace switching, and state synchronization.
+     - **Action Executor ([actions.py](src/agent/actions.py))**: Decoupled execution logic for browser skills, app launching, and UI interaction.
+     - **Screen Capture ([capture.py](src/agent/capture.py))**: High-performance screenshot pipeline with perceptual hashing for change detection.
+     - **Prompts ([prompts.py](src/agent/prompts.py))**: Centralized prompt engineering for all agent modes.
+
+2. **Main Application ([src/main.py](src/main.py))**
      - Provides the PySide6 UI and routes agent output into the GUI.
-     - Captures screenshots, plans actions with Gemini, and executes input (mouse/keyboard).
-     - Detects Secure Desktop/UAC symptoms (black screenshots or access denied) and triggers the orchestrator.
+     - Handles secure session management and API key clearing on logout.
 
-2. **UAC Orchestrator ([src/uac/orchestrator.py](src/uac/orchestrator.py))**
+3. **UAC Orchestrator ([src/uac/orchestrator.py](src/uac/orchestrator.py))**
      - Runs as SYSTEM via Task Scheduler on boot.
-     - Watches for `%SystemRoot%\Temp\uac_trigger.txt`.
-     - Launches the UAC Agent in the WinLogon Secure Desktop session.
+     - Watches for triggers and launches the UAC Agent in the WinLogon Secure Desktop session.
 
-3. **UAC Agent ([src/uac/agent.py](src/uac/agent.py))**
-     - Captures a Secure Desktop snapshot to `%SystemRoot%\Temp\uac_snapshot.bmp`.
-     - Waits for `%SystemRoot%\Temp\uac_response.txt` and presses Allow or Deny.
+4. **UAC Agent ([src/uac/agent.py](src/uac/agent.py))**
+     - Captures Secure Desktop snapshots and interacts with elevated prompts.
 
-4. **Vision Pipeline**
-     - **Capture**: Uses `mss` first when possible, then falls back to `pyautogui`.
-     - **Analysis**:
-         - **ROBO**: Gemini Robotics-ER element detection.
-         - **OCR**: EasyOCR + OpenCV contour/icon candidates.
-     - **Planning**: Sends the screenshot plus an annotated overlay to Gemini.
-
-5. **Agent Desktop (Optional)**
-     - Isolated desktop via [src/desktop/desktop_manager.py](src/desktop/desktop_manager.py).
+5. **Agent Desktop**
+     - Isolated desktop sandbox via [src/desktop/desktop_manager.py](src/desktop/desktop_manager.py).
      - Minimal taskbar shell for the agent session plus a sidecar preview in the main UI.
 
 ## Optional WebSocket Gateway
