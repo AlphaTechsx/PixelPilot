@@ -1,8 +1,6 @@
-import sys
-import threading
 import logging
-from PySide6.QtCore import QObject, Slot, QThread, Signal, Qt, QTimer, QCoreApplication
-from PySide6.QtWidgets import QMessageBox, QInputDialog
+from PySide6.QtCore import QObject, Slot, QThread, Signal, QCoreApplication
+from PySide6.QtWidgets import QDialog
 from agent.core import AgentOrchestrator
 from config import Config, OperationMode
 from tools.eye import GeminiRoboticsEye
@@ -41,7 +39,6 @@ class MainController(QObject):
         self._stop_requested = False
         
         self.desktop_manager = None
-        self.sidecar = None
 
         self.gui_adapter.confirmation_requested.connect(self.handle_confirmation)
         self.gui_adapter.input_requested.connect(self.handle_input)
@@ -75,52 +72,57 @@ class MainController(QObject):
                     self.main_window.chat_widget.set_workspace_status(
                         self.agent.active_workspace
                     )
+                    self.main_window.chat_widget.set_agent_view_enabled(
+                        self.agent.active_workspace == "agent"
+                    )
             except Exception:
                 pass
             
             if self.desktop_manager:
                 self.agent.desktop_manager = self.desktop_manager
+
+            self.update_sidecar_visibility()
         except Exception as e:
             self.gui_adapter.add_error_message(f"Failed to initialize agent: {e}")
 
     def init_sidecar(self):
-        """Initialize the Agent Desktop and sidecar preview."""
+        """Initialize Agent Desktop and bind capture source for embedded preview."""
         if not Config.ENABLE_AGENT_DESKTOP:
             return
         
         try:
             from desktop.desktop_manager import AgentDesktopManager
-            from ui.sidecar_preview import SidecarPreview
-            
+
+            if self.desktop_manager and getattr(self.desktop_manager, "is_created", False):
+                if self.main_window and hasattr(self.main_window, "chat_widget"):
+                    self.main_window.chat_widget.set_agent_preview_source(self.desktop_manager)
+                return
+
             self.desktop_manager = AgentDesktopManager(Config.AGENT_DESKTOP_NAME)
             if not self.desktop_manager.create_desktop():
                 logger.warning("Failed to create Agent Desktop")
                 self.desktop_manager = None
+                if self.main_window and hasattr(self.main_window, "chat_widget"):
+                    self.main_window.chat_widget.set_agent_preview_source(None)
                 return
             
             self.desktop_manager.initialize_shell()
-            
-            self.sidecar = SidecarPreview(
-                self.main_window,
-                width=Config.SIDECAR_PREVIEW_WIDTH,
-                height=Config.SIDECAR_PREVIEW_HEIGHT,
-                fps=Config.SIDECAR_PREVIEW_FPS,
-            )
-            self.sidecar.set_capture_source(self.desktop_manager)
-            
-            self.main_window.sidecar = self.sidecar
+
+            if self.main_window and hasattr(self.main_window, "chat_widget"):
+                self.main_window.chat_widget.set_agent_preview_source(self.desktop_manager)
             
             if self.agent:
                 self.agent.desktop_manager = self.desktop_manager
                 if hasattr(self.agent, 'keyboard') and hasattr(self.agent.keyboard, 'set_desktop_manager'):
                     self.agent.keyboard.set_desktop_manager(self.desktop_manager)
                 
-            logger.info("Agent Desktop and sidecar preview initialized")
+            logger.info("Agent Desktop initialized for embedded preview")
             self.update_sidecar_visibility()
         except Exception as e:
             logger.exception(f"Failed to initialize Agent Desktop: {e}")
             self.desktop_manager = None
-            self.sidecar = None
+            if self.main_window and hasattr(self.main_window, "chat_widget"):
+                self.main_window.chat_widget.set_agent_preview_source(None)
 
     @Slot(str, str, object)
     def handle_confirmation(self, title, text, payload):
@@ -195,7 +197,7 @@ class MainController(QObject):
             return
 
         self._stop_requested = True
-        self.gui_adapter.add_activity_message("Stopping…")
+        self.gui_adapter.add_activity_message("Stopping...")
 
         try:
             if hasattr(self.agent, "request_stop"):
@@ -243,12 +245,6 @@ class MainController(QObject):
                 except Exception:
                     pass
 
-            if self.sidecar:
-                try:
-                    self.sidecar.close()
-                except Exception:
-                    pass
-
             if self.desktop_manager:
                 try:
                     self.desktop_manager.close_all_windows(timeout=1.5)
@@ -262,6 +258,12 @@ class MainController(QObject):
                     self.desktop_manager.close()
                 except Exception:
                     pass
+
+            try:
+                if self.main_window and hasattr(self.main_window, "chat_widget"):
+                    self.main_window.chat_widget.set_agent_preview_source(None)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -325,15 +327,32 @@ class MainController(QObject):
             self.gui_adapter.add_activity_message("Settings updated")
 
     def update_sidecar_visibility(self):
-        """Show or hide the sidecar based on the current workspace context."""
-        should_show = False
-        if self.agent and self.agent.active_workspace == "agent":
-            if not self.sidecar:
-                self.init_sidecar()
-            should_show = bool(self.sidecar)
+        """Sync embedded agent preview availability from workspace state."""
+        if not self.main_window or not hasattr(self.main_window, "chat_widget"):
+            return
 
-        if should_show:
-            self.sidecar.show()
-            self.sidecar.reattach()
-        elif self.sidecar:
-            self.sidecar.hide()
+        workspace = "user"
+        if self.agent:
+            workspace = (self.agent.active_workspace or "user").strip().lower()
+        is_agent_workspace = workspace == "agent"
+
+        try:
+            self.main_window.chat_widget.set_agent_view_enabled(is_agent_workspace)
+        except Exception:
+            pass
+
+        if not is_agent_workspace:
+            try:
+                self.main_window.chat_widget.set_agent_preview_source(None)
+            except Exception:
+                pass
+            return
+
+        if not self.desktop_manager or not getattr(self.desktop_manager, "is_created", False):
+            self.init_sidecar()
+
+        try:
+            source = self.desktop_manager if self.desktop_manager and getattr(self.desktop_manager, "is_created", False) else None
+            self.main_window.chat_widget.set_agent_preview_source(source)
+        except Exception:
+            pass

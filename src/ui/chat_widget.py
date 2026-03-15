@@ -1,4 +1,4 @@
-import os
+﻿import os
 import re
 from uuid import uuid4
 
@@ -13,14 +13,15 @@ from PySide6.QtWidgets import (
     QFrame,
     QComboBox,
 )
-from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtCore import Qt, Signal, QUrl, QTimer
 from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtSvgWidgets import QSvgWidget
-from PySide6.QtCore import QTimer
 
 from services.audio import AudioService
 from .voice_visualizer import VoiceVisualizer
+from .sidecar_preview import EmbeddedAgentPreview
 from config import OperationMode, Config
+
 
 class ChatWidget(QWidget):
     command_received = Signal(str)
@@ -30,12 +31,15 @@ class ChatWidget(QWidget):
     def __init__(self):
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
         self.audio_service = AudioService()
         self.audio_service.text_received.connect(self.on_speech_text)
         self.audio_service.status_changed.connect(self.on_listening_status)
         self.audio_service.level_changed.connect(self.on_audio_level)
+
         self.setup_ui()
         self.apply_styles()
+
         self.send_btn.clicked.connect(self.send_message)
         self.input_field.returnPressed.connect(self.send_message)
         self.mic_btn.clicked.connect(self.toggle_listening)
@@ -44,7 +48,12 @@ class ChatWidget(QWidget):
         self.mode_combo.currentIndexChanged.connect(self._emit_mode_changed)
         self.vision_combo.currentIndexChanged.connect(self.update_vision_tooltip)
         self.vision_combo.currentIndexChanged.connect(self._emit_vision_changed)
-        self.view_mode = "full"
+        self.agent_view_btn.clicked.connect(self._toggle_agent_view)
+
+        self.view_mode = "bar_only"
+        self._agent_view_enabled = False
+        self._agent_view_requested = False
+
         self._chat_model: list[dict] = []
         self._turn_active = False
         self._thinking_id: str | None = None
@@ -54,13 +63,13 @@ class ChatWidget(QWidget):
         self._stream_pos: int = 0
         self._guidance_payload: dict | None = None
         self._guidance_active: bool = False
-        self._guidance_input_active: bool = False  # New: for conversational guidance
+        self._guidance_input_active: bool = False
         self._guidance_input_payload: dict | None = None
-        self.set_view_mode("full")
+
+        self.set_view_mode("bar_only")
         self.update_mode_tooltip()
         self.update_vision_tooltip()
 
-        # Default vision selection from Config
         self.set_vision_mode("ROBO" if Config.USE_ROBOTICS_EYE else "OCR")
         self.set_workspace_status(Config.DEFAULT_WORKSPACE)
 
@@ -120,6 +129,32 @@ class ChatWidget(QWidget):
 
         self.workspace_badge.style().unpolish(self.workspace_badge)
         self.workspace_badge.style().polish(self.workspace_badge)
+        self.set_agent_view_enabled(key == "agent")
+
+    def set_expanded(self, expanded: bool):
+        self.set_view_mode("extended" if expanded else "bar_only")
+
+    def set_agent_view_enabled(self, enabled: bool):
+        self._agent_view_enabled = bool(enabled)
+        self.agent_view_btn.setEnabled(self._agent_view_enabled)
+        if self._agent_view_enabled:
+            self.agent_view_btn.setToolTip("Toggle live Agent Desktop view")
+        else:
+            self.agent_view_btn.setToolTip("Agent view is available only on agent workspace")
+            self._agent_view_requested = False
+        self._apply_view_mode()
+
+    def set_agent_preview_source(self, desktop_manager_or_none):
+        self.agent_preview.set_capture_source(desktop_manager_or_none)
+        if desktop_manager_or_none is None:
+            self._agent_view_requested = False
+        self._apply_view_mode()
+
+    def _toggle_agent_view(self):
+        if not self._agent_view_enabled:
+            return
+        self._agent_view_requested = not self._agent_view_requested
+        self._apply_view_mode()
 
     def _emit_vision_changed(self):
         text = self.vision_combo.currentText().strip().upper()
@@ -134,19 +169,19 @@ class ChatWidget(QWidget):
         layout = QVBoxLayout()
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(8)
-        
-        # Header
-        self.header = QFrame()
-        self.header.setObjectName("header")
-        h = QHBoxLayout(self.header)
-        h.setContentsMargins(0, 0, 0, 0)
-        h.setSpacing(12)
-        
-        logo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logos", "pixelpilot-icon.svg"))
-        self.logo = QSvgWidget(logo_path)
-        self.logo.setObjectName("logo")
-        self.logo.setFixedSize(50, 50)
-        
+
+        self.extended_panel = QFrame()
+        self.extended_panel.setObjectName("extendedPanel")
+        ep = QVBoxLayout(self.extended_panel)
+        ep.setContentsMargins(10, 10, 10, 10)
+        ep.setSpacing(8)
+
+        self.settings_row = QFrame()
+        self.settings_row.setObjectName("settingsRow")
+        sr = QHBoxLayout(self.settings_row)
+        sr.setContentsMargins(0, 0, 0, 0)
+        sr.setSpacing(8)
+
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["GUIDANCE", "SAFE", "AUTO"])
         self.mode_combo.setObjectName("modeCombo")
@@ -160,44 +195,32 @@ class ChatWidget(QWidget):
         self.vision_combo.setItemData(0, "Robotics vision (Gemini Robotics-ER).", Qt.ItemDataRole.ToolTipRole)
         self.vision_combo.setItemData(1, "Local OCR + CV (EasyOCR + OpenCV).", Qt.ItemDataRole.ToolTipRole)
 
-        # Keep the two dropdowns in a dedicated container so they never overlap.
-        self.dropdowns = QWidget()
-        self.dropdowns.setObjectName("dropdowns")
-        dd = QHBoxLayout(self.dropdowns)
-        dd.setContentsMargins(0, 0, 0, 0)
-        dd.setSpacing(10)
-        dd.addWidget(self.mode_combo)
-        dd.addWidget(self.vision_combo)
-
         self.workspace_badge = QLabel("USER")
         self.workspace_badge.setObjectName("workspaceBadge")
         self.workspace_badge.setToolTip("Current workspace")
-        
-        self.minimize_btn = QPushButton("−")
-        self.minimize_btn.setObjectName("minimizeBtn")
-        self.minimize_btn.setFixedSize(28, 28)
-        self.minimize_btn.setToolTip("Drift into the small")
-        
-        self.expand_btn = QPushButton("⤢")
-        self.expand_btn.setObjectName("expandBtn")
-        self.expand_btn.setFixedSize(28, 28)
-        self.expand_btn.setToolTip("Expand the horizon")
-        
-        self.close_btn = QPushButton("×")
-        self.close_btn.setObjectName("closeBtn")
-        self.close_btn.setFixedSize(28, 28)
-        
-        h.addWidget(self.logo)
-        h.addWidget(self.dropdowns)
-        h.addWidget(self.workspace_badge)
-        h.addStretch()
-        h.addWidget(self.minimize_btn)
-        h.addWidget(self.expand_btn)
-        h.addWidget(self.close_btn)
-        
-        layout.addWidget(self.header)
-        
-        # Chat
+
+        self.logout_btn = QPushButton("Sign Out")
+        self.logout_btn.setObjectName("logoutLink")
+        self.logout_btn.setCursor(Qt.PointingHandCursor)
+        self.logout_btn.setToolTip("Sign out and switch accounts")
+
+        sr.addWidget(self.mode_combo)
+        sr.addWidget(self.vision_combo)
+        sr.addWidget(self.workspace_badge)
+        sr.addStretch()
+        sr.addWidget(self.logout_btn)
+        ep.addWidget(self.settings_row)
+
+        self.process_panel = QFrame()
+        self.process_panel.setObjectName("processPanel")
+        pp = QVBoxLayout(self.process_panel)
+        pp.setContentsMargins(0, 0, 0, 0)
+        pp.setSpacing(6)
+
+        self.process_title = QLabel("Process Details")
+        self.process_title.setObjectName("sectionTitle")
+        pp.addWidget(self.process_title)
+
         self.chat_display = QTextBrowser()
         self.chat_display.setObjectName("chatDisplay")
         self.chat_display.setReadOnly(True)
@@ -205,28 +228,25 @@ class ChatWidget(QWidget):
         self.chat_display.setOpenLinks(False)
         self.chat_display.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_display.setPlaceholderText("Ask anything to Pixie.")
-        layout.addWidget(self.chat_display)
+        pp.addWidget(self.chat_display)
 
-        # Visualizer
         self.voice_visualizer = VoiceVisualizer()
         self.voice_visualizer.setObjectName("voiceVisualizer")
         self.voice_visualizer.setVisible(False)
-        layout.addWidget(self.voice_visualizer)
+        pp.addWidget(self.voice_visualizer)
 
-        # Compact stop button (not in header)
         self.compact_stop_btn = QPushButton("Stop")
         self.compact_stop_btn.setObjectName("compactStopBtn")
-        self.compact_stop_btn.setFixedHeight(26)
+        self.compact_stop_btn.setFixedHeight(28)
         self.compact_stop_btn.setVisible(False)
         self.compact_stop_btn.setToolTip("Stop voice session")
         self.compact_stop_btn.clicked.connect(self.audio_service.stop_listening)
-        layout.addWidget(self.compact_stop_btn)
-        
-        # Input
-        self.input_hint = QLabel("Open apps, send emails/WhatsApp, fix PC issues, or ask anything…")
+        pp.addWidget(self.compact_stop_btn)
+
+        self.input_hint = QLabel("Open apps, send emails/WhatsApp, fix PC issues, or ask anything...")
         self.input_hint.setObjectName("inputHint")
         self.input_hint.setWordWrap(True)
-        layout.addWidget(self.input_hint)
+        pp.addWidget(self.input_hint)
 
         self.guidance_bar = QFrame()
         self.guidance_bar.setObjectName("guidanceBar")
@@ -248,170 +268,261 @@ class ChatWidget(QWidget):
         button_row = QWidget()
         b = QHBoxLayout(button_row)
         b.setContentsMargins(0, 0, 0, 0)
-        b.setSpacing(0)
+        b.setSpacing(6)
         b.addStretch()
         b.addWidget(self.continue_btn)
         b.addWidget(self.guidance_btn)
         g.addWidget(button_row)
         self.guidance_bar.setVisible(False)
-        layout.addWidget(self.guidance_bar)
+        pp.addWidget(self.guidance_bar)
 
-        self.input_frame = QFrame()
-        self.input_frame.setObjectName("inputFrame")
-        i = QHBoxLayout(self.input_frame)
-        i.setContentsMargins(0, 0, 0, 0)
+        ep.addWidget(self.process_panel)
+
+        self.agent_separator = QFrame()
+        self.agent_separator.setObjectName("agentSeparator")
+        self.agent_separator.setFrameShape(QFrame.Shape.HLine)
+        self.agent_separator.setFrameShadow(QFrame.Shadow.Plain)
+
+        self.agent_panel = QFrame()
+        self.agent_panel.setObjectName("agentPanel")
+        ap = QVBoxLayout(self.agent_panel)
+        ap.setContentsMargins(0, 0, 0, 0)
+        ap.setSpacing(6)
+
+        self.agent_panel_title = QLabel("Agent Desktop View")
+        self.agent_panel_title.setObjectName("sectionTitle")
+        ap.addWidget(self.agent_panel_title)
+
+        self.agent_preview = EmbeddedAgentPreview(self, fps=Config.SIDECAR_PREVIEW_FPS)
+        ap.addWidget(self.agent_preview)
+
+        self.extended_panel.setVisible(False)
+
+        self.top_bar = QFrame()
+        self.top_bar.setObjectName("topBar")
+        h = QHBoxLayout(self.top_bar)
+        h.setContentsMargins(12, 10, 12, 10)
+        h.setSpacing(10)
+
+        logo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "logos", "pixelpilot-icon.svg"))
+        self.logo = QSvgWidget(logo_path)
+        self.logo.setObjectName("logo")
+        self.logo.setFixedSize(32, 32)
+
+        self.input_shell = QFrame()
+        self.input_shell.setObjectName("barInput")
+        i = QHBoxLayout(self.input_shell)
+        i.setContentsMargins(10, 4, 10, 4)
         i.setSpacing(8)
-        
+
         self.input_field = QLineEdit()
         self.input_field.setObjectName("inputField")
-        self.input_field.setPlaceholderText("> Type a command...")
-        
-        self.mic_btn = QPushButton("🎙")
+        self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
+
+        self.mic_btn = QPushButton("Mic")
         self.mic_btn.setObjectName("micBtn")
-        self.mic_btn.setFixedSize(34, 34)
+        self.mic_btn.setFixedSize(40, 30)
         self.mic_btn.setToolTip("Start listening")
 
-        self.send_btn = QPushButton("→")
+        self.send_btn = QPushButton("Go")
         self.send_btn.setObjectName("sendBtn")
-        self.send_btn.setFixedSize(28, 28)
-        
-        i.addWidget(self.input_field)
+        self.send_btn.setFixedSize(38, 30)
+
+        i.addWidget(self.input_field, 1)
         i.addWidget(self.mic_btn)
         i.addWidget(self.send_btn)
-        
-        layout.addWidget(self.input_frame)
 
-        # Footer with logout link
-        self.footer = QFrame()
-        self.footer.setObjectName("footer")
-        f = QHBoxLayout(self.footer)
-        f.setContentsMargins(4, 2, 4, 0)
-        f.setSpacing(0)
-        f.addStretch()
-        self.logout_btn = QPushButton("Sign Out")
-        self.logout_btn.setObjectName("logoutLink")
-        self.logout_btn.setCursor(Qt.PointingHandCursor)
-        self.logout_btn.setToolTip("Sign out and switch accounts")
-        f.addWidget(self.logout_btn)
-        layout.addWidget(self.footer)
+        self.expand_btn = QPushButton("Details")
+        self.expand_btn.setObjectName("expandBtn")
+        self.expand_btn.setFixedHeight(32)
+        self.expand_btn.setToolTip("Show process details")
 
+        self.agent_view_btn = QPushButton("Agent View")
+        self.agent_view_btn.setObjectName("agentViewBtn")
+        self.agent_view_btn.setFixedHeight(32)
+        self.agent_view_btn.setToolTip("Agent view is available only on agent workspace")
+        self.agent_view_btn.setEnabled(False)
+
+        self.minimize_btn = QPushButton("Min")
+        self.minimize_btn.setObjectName("minimizeBtn")
+        self.minimize_btn.setFixedHeight(32)
+        self.minimize_btn.setToolTip("Hide to background")
+
+        self.close_btn = QPushButton("X")
+        self.close_btn.setObjectName("closeBtn")
+        self.close_btn.setFixedHeight(32)
+
+        h.addWidget(self.logo)
+        h.addWidget(self.input_shell, 1)
+        h.addWidget(self.expand_btn)
+        h.addWidget(self.agent_view_btn)
+        h.addWidget(self.minimize_btn)
+        h.addWidget(self.close_btn)
+
+        self.agent_below_container = QFrame()
+        self.agent_below_container.setObjectName("agentBelowContainer")
+        abc = QVBoxLayout(self.agent_below_container)
+        abc.setContentsMargins(0, 0, 0, 0)
+        abc.setSpacing(6)
+        abc.addWidget(self.agent_separator)
+        abc.addWidget(self.agent_panel)
+        self.agent_below_container.setVisible(False)
+
+        layout.addWidget(self.extended_panel)
+        layout.addWidget(self.top_bar)
+        layout.addWidget(self.agent_below_container)
         self.setLayout(layout)
 
     def apply_styles(self):
         self.setStyleSheet("""
-            QToolTip { background: #1a1a1a; color: #e5e5e5; border: 1px solid #262626; padding: 6px 10px; font: 11px 'Segoe UI', 'Inter', sans-serif; }
-            ChatWidget { background: rgba(18, 30, 44, 190); border: 1px solid rgba(52, 78, 102, 170); border-radius: 10px; font-family: 'Segoe UI', 'Inter', sans-serif; }
-            QFrame#header { background: transparent; }
-            QLabel#logo { color: #057FCA; font: bold 14px 'Consolas'; letter-spacing: 2px; }
-            QComboBox#modeCombo { background: rgba(20, 36, 54, 180); color: #cfe9ff; border: 1px solid rgba(52, 78, 102, 180); border-radius: 8px; padding: 6px 12px; font: 600 12px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.4px; min-width: 90px; }
-            QComboBox#modeCombo::drop-down { border: none; width: 16px; }
-            QComboBox#modeCombo::down-arrow { image: none; }
-            QComboBox#modeCombo:hover { border-color: #404040; }
-            QComboBox#visionCombo { background: rgba(20, 36, 54, 180); color: #cfe9ff; border: 1px solid rgba(52, 78, 102, 180); border-radius: 8px; padding: 6px 12px; font: 600 12px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.4px; min-width: 60px; }
-            QComboBox#visionCombo::drop-down { border: none; width: 16px; }
-            QComboBox#visionCombo::down-arrow { image: none; }
-            QComboBox#visionCombo:hover { border-color: #404040; }
-            QComboBox QAbstractItemView { background: rgba(20, 36, 54, 210); color: #e5f3ff; selection-background-color: rgba(36, 60, 86, 190); border: 1px solid rgba(52, 78, 102, 180); font: 500 11px 'Segoe UI', 'Inter', sans-serif; }
-            QLabel#workspaceBadge {
-                background: rgba(36, 40, 46, 180);
-                color: #e6f3ff;
-                border: 1px solid rgba(90, 112, 132, 180);
+            QToolTip { background: #111827; color: #f9fafb; border: 1px solid #1f2937; padding: 6px 10px; font: 11px 'Segoe UI', sans-serif; }
+            ChatWidget { background: transparent; font-family: 'Segoe UI', sans-serif; }
+            QFrame#topBar {
+                background: #f8fafc;
+                border: 1px solid #d3dce8;
+                border-radius: 22px;
+            }
+            QFrame#barInput {
+                background: #ffffff;
+                border: 1px solid #cfd8e3;
+                border-radius: 14px;
+            }
+            QLineEdit#inputField {
+                background: transparent;
+                border: none;
+                color: #1f2937;
+                font: 15px 'Segoe UI', sans-serif;
+            }
+            QPushButton#sendBtn, QPushButton#micBtn {
+                background: #eef2f7;
+                border: 1px solid #d5dce7;
+                border-radius: 10px;
+                color: #334155;
+                font: 600 11px 'Segoe UI', sans-serif;
+            }
+            QPushButton#sendBtn:hover, QPushButton#micBtn:hover { background: #e2e8f0; border-color: #bcc7d6; }
+            QPushButton#expandBtn, QPushButton#agentViewBtn, QPushButton#minimizeBtn, QPushButton#closeBtn {
+                background: #ffffff;
+                border: 1px solid #d2dae5;
+                border-radius: 10px;
+                color: #273345;
+                font: 600 12px 'Segoe UI', sans-serif;
+                padding: 0 10px;
+            }
+            QPushButton#expandBtn:hover, QPushButton#agentViewBtn:hover, QPushButton#minimizeBtn:hover {
+                background: #f1f5f9;
+                border-color: #bfcbdc;
+            }
+            QPushButton#agentViewBtn:disabled {
+                color: #9ca3af;
+                background: #f4f6f8;
+                border-color: #e5e7eb;
+            }
+            QPushButton#closeBtn:hover {
+                background: #fee2e2;
+                color: #7f1d1d;
+                border-color: #fecaca;
+            }
+            QFrame#extendedPanel {
+                background: #f8fafc;
+                border: 1px solid #d3dce8;
+                border-radius: 16px;
+            }
+            QFrame#settingsRow {
+                background: #ffffff;
+                border: 1px solid #d8e0ea;
+                border-radius: 10px;
+                padding: 6px;
+            }
+            QComboBox#modeCombo, QComboBox#visionCombo {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #cfd8e3;
                 border-radius: 8px;
-                padding: 1px 1px;
-                font: 700 9px 'Segoe UI', 'Inter', sans-serif;
-                letter-spacing: 0.8px;
-                min-width: 34px;
-                max-height: 18px;
+                padding: 5px 10px;
+                font: 600 12px 'Segoe UI', sans-serif;
+                min-width: 88px;
+            }
+            QComboBox#visionCombo { min-width: 64px; }
+            QComboBox#modeCombo::drop-down, QComboBox#visionCombo::drop-down { border: none; width: 14px; }
+            QComboBox#modeCombo::down-arrow, QComboBox#visionCombo::down-arrow { image: none; }
+            QLabel#workspaceBadge {
+                background: #f3f4f6;
+                color: #334155;
+                border: 1px solid #d5dce7;
+                border-radius: 8px;
+                padding: 2px 8px;
+                font: 700 10px 'Segoe UI', sans-serif;
+                min-width: 52px;
                 qproperty-alignment: 'AlignCenter';
             }
             QLabel#workspaceBadge[workspace="user"] {
-                background: rgba(40, 30, 14, 190);
-                color: #ffe6b5;
-                border: 1px solid rgba(160, 120, 60, 190);
+                background: #fff7ed;
+                color: #9a3412;
+                border: 1px solid #fed7aa;
             }
             QLabel#workspaceBadge[workspace="agent"] {
-                background: rgba(10, 32, 22, 190);
-                color: #baf7d0;
-                border: 1px solid rgba(60, 150, 110, 190);
+                background: #ecfdf3;
+                color: #166534;
+                border: 1px solid #bbf7d0;
             }
-            QPushButton#minimizeBtn, QPushButton#expandBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0b1f2a, stop:1 #0f2f43);
-                color: #bfe6ff;
-                border: 1px solid #1b3c52;
-                border-radius: 8px;
-                font: 700 12px 'Segoe UI', 'Inter', sans-serif;
-                padding: 2px;
-            }
-            QPushButton#minimizeBtn:hover, QPushButton#expandBtn:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0e2b3a, stop:1 #144763);
-                border-color: #057FCA;
-                color: #e9f6ff;
-            }
-            QPushButton#minimizeBtn:pressed, QPushButton#expandBtn:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0a1a24, stop:1 #0b2a3a);
-                border-color: #0a5f97;
-            }
-            QPushButton#closeBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #2a0b0b, stop:1 #3a0b14);
-                color: #ffd1d1;
-                border: 1px solid #4a1b1b;
-                border-radius: 8px;
-                font: 700 12px 'Segoe UI', 'Inter', sans-serif;
-                padding: 2px;
-            }
-            QPushButton#closeBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3a0f0f, stop:1 #4a1018); color: #ffffff; border-color: #ef4444; }
-            QPushButton#closeBtn:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #220909, stop:1 #300810); border-color: #b91c1c; }
-            QFrame#footer { background: transparent; }
             QPushButton#logoutLink {
                 background: transparent;
                 border: none;
-                color: #ff6b6b;
-                font: 700 12px 'Segoe UI', 'Inter', sans-serif;
+                color: #d14343;
+                font: 700 12px 'Segoe UI', sans-serif;
                 padding: 4px 8px;
             }
-            QPushButton#logoutLink:hover { color: #ff4c4c; text-decoration: underline; }
-            QTextEdit#chatDisplay { background: rgba(20, 34, 50, 170); color: #d4d4d4; border: none; font: 15px 'Segoe UI', 'Inter', sans-serif; padding: 8px; }
-            QLabel#inputHint { color: #8fb7d6; font: 12px 'Segoe UI', 'Inter', sans-serif; padding: 2px 4px; }
-            QFrame#guidanceBar { background: transparent; }
-            QWidget#voiceVisualizer { background: rgba(18, 32, 48, 165); border: 1px solid rgba(46, 72, 96, 170); border-radius: 10px; }
-            QPushButton#compactStopBtn { background: rgba(12, 24, 36, 170); color: #bfe6ff; border: 1px solid rgba(52, 78, 102, 170); border-radius: 8px; font: 700 11px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.3px; padding: 4px 10px; }
-            QPushButton#compactStopBtn:hover { background: rgba(14, 30, 46, 190); border-color: #057FCA; color: #e9f6ff; }
-            QPushButton#compactStopBtn:pressed { background: rgba(10, 22, 32, 190); border-color: #0a5f97; }
-            QFrame#inputFrame { background: rgba(24, 40, 56, 175); border: 1px solid rgba(52, 78, 102, 160); border-radius: 8px; padding: 6px; }
-            QLineEdit#inputField { background: transparent; color: #fafafa; border: none; font: 14px 'Segoe UI', 'Inter', sans-serif; padding: 4px; }
-            QPushButton#micBtn {
-                background: qradialgradient(cx:0.3, cy:0.3, radius:1.1, stop:0 #0c3b5a, stop:1 #0a2233);
-                color: #d7efff;
-                border: 1px solid rgba(52, 78, 102, 180);
+            QPushButton#logoutLink:hover { text-decoration: underline; }
+            QLabel#sectionTitle {
+                color: #334155;
+                font: 700 12px 'Segoe UI', sans-serif;
+                padding-left: 2px;
+            }
+            QFrame#agentSeparator {
+                color: #d5deea;
+                background: #d5deea;
+                border: none;
+                min-height: 1px;
+                max-height: 1px;
+            }
+            QTextEdit#chatDisplay {
+                background: #ffffff;
+                color: #1f2937;
+                border: 1px solid #d9e2ec;
                 border-radius: 10px;
-                font: 700 12px 'Segoe UI', 'Inter', sans-serif;
+                font: 14px 'Segoe UI', sans-serif;
+                padding: 10px;
             }
-            QPushButton#micBtn:hover { border-color: #057FCA; color: #ffffff; }
-            QPushButton#micBtn:pressed { background: qradialgradient(cx:0.4, cy:0.4, radius:1.1, stop:0 #0a2f45, stop:1 #081a26); }
-            QPushButton#sendBtn { background: #057FCA; color: #0d0d0d; border: none; border-radius: 4px; font: 700 14px 'Segoe UI', 'Inter', sans-serif; letter-spacing: 0.2px; }
-            QPushButton#sendBtn:hover { background: #059669; }
+            QLabel#inputHint { color: #64748b; font: 12px 'Segoe UI', sans-serif; padding: 2px 2px; }
+            QWidget#voiceVisualizer { background: #eef2f7; border: 1px solid #d5deea; border-radius: 10px; }
+            QPushButton#compactStopBtn {
+                background: #fff7ed;
+                color: #9a3412;
+                border: 1px solid #fed7aa;
+                border-radius: 8px;
+                font: 700 11px 'Segoe UI', sans-serif;
+                padding: 5px 10px;
+            }
             QPushButton#guidanceBtn {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #057FCA, stop:1 #0369A1);
+                background: #2563eb;
                 color: #ffffff;
-                border: 2px solid #38BDF8;
+                border: 1px solid #1d4ed8;
                 border-radius: 8px;
-                font: 700 13px 'Segoe UI', 'Inter', sans-serif;
+                font: 700 13px 'Segoe UI', sans-serif;
                 padding: 4px 12px;
             }
-            QPushButton#guidanceBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #0284C7, stop:1 #0EA5E9); border-color: #7DD3FC; }
-            QPushButton#guidanceBtn:pressed { background: #0369A1; border-color: #0284C7; }
+            QPushButton#guidanceBtn:hover { background: #1d4ed8; }
             QPushButton#continueBtn {
-                background: transparent;
-                color: #9fd0ff;
-                border: 2px solid #234e6e;
+                background: #ffffff;
+                color: #334155;
+                border: 1px solid #cbd5e1;
                 border-radius: 8px;
-                font: 600 13px 'Segoe UI', 'Inter', sans-serif;
+                font: 600 13px 'Segoe UI', sans-serif;
                 padding: 4px 12px;
             }
-            QPushButton#continueBtn:hover { background: rgba(35, 78, 110, 50); border-color: #38BDF8; color: #ffffff; }
-            QPushButton#continueBtn:pressed { background: rgba(35, 78, 110, 100); border-color: #0284C7; }
+            QPushButton#continueBtn:hover { background: #f1f5f9; border-color: #94a3b8; }
         """)
-
     def _on_anchor_clicked(self, url: QUrl):
         u = url.toString()
         if u.startswith("pp://thinking/toggle/"):
@@ -593,7 +704,7 @@ class ChatWidget(QWidget):
         if "planning action" in low:
             state["phase"] = "planning"
             state["action"] = "planning"
-            return False, "Planning next step…"
+            return False, "Planning next step..."
 
         # Executing: <something>
         m = re.match(r"^executing\s*:\s*(.*)$", line, flags=re.IGNORECASE)
@@ -603,7 +714,7 @@ class ChatWidget(QWidget):
             detail = (m.group(1) or "").strip()
             if detail:
                 return False, f"Working on: {detail}"
-            return False, "Working…"
+            return False, "Working..."
 
         # Action: reply / click / type / etc.
         m = re.match(r"^action\s*:\s*(.*)$", line, flags=re.IGNORECASE)
@@ -612,13 +723,13 @@ class ChatWidget(QWidget):
             state["phase"] = "working"
             action_low = action.lower()
             action_map = {
-                "reply": ("replying", "Composing response…"),
-                "type_text": ("typing", "Typing…"),
-                "key_combo": ("shortcut", "Pressing a shortcut…"),
-                "click": ("clicking", "Clicking…"),
-                "wait": ("waiting", "Waiting…"),
-                "scroll": ("scrolling", "Scrolling…"),
-                "open_app": ("opening", "Opening an app…"),
+                "reply": ("replying", "Composing response..."),
+                "type_text": ("typing", "Typing..."),
+                "key_combo": ("shortcut", "Pressing a shortcut..."),
+                "click": ("clicking", "Clicking..."),
+                "wait": ("waiting", "Waiting..."),
+                "scroll": ("scrolling", "Scrolling..."),
+                "open_app": ("opening", "Opening an app..."),
             }
             if action_low in action_map:
                 state["action"], friendly = action_map[action_low]
@@ -631,7 +742,7 @@ class ChatWidget(QWidget):
                 state["action"] = action_low
                 if state.get("_last_action_shown") != action_low:
                     state["_last_action_shown"] = action_low
-                    return False, "Working…"
+                    return False, "Working..."
             return False, None
 
         # Next action: <...> (some backends log this form)
@@ -663,7 +774,7 @@ class ChatWidget(QWidget):
             state["action"] = "checking"
             if state.get("_last_action_shown") != "checking":
                 state["_last_action_shown"] = "checking"
-                return False, "Checking the screen…"
+                return False, "Checking the screen..."
             return False, None
 
         if "uac detected" in low or "orchestrator protocol" in low:
@@ -671,7 +782,7 @@ class ChatWidget(QWidget):
             state["action"] = "permissions"
             if state.get("_last_action_shown") != "permissions":
                 state["_last_action_shown"] = "permissions"
-                return False, "Handling a permissions prompt…"
+                return False, "Handling a permissions prompt..."
             return False, None
 
         if "screenshot attempt" in low and "failed" in low:
@@ -679,7 +790,7 @@ class ChatWidget(QWidget):
             state["action"] = "retrying"
             if state.get("_last_action_shown") != "retrying":
                 state["_last_action_shown"] = "retrying"
-                return False, "Retrying…"
+                return False, "Retrying..."
             return False, None
 
         if "error parsing gemini response" in low:
@@ -687,7 +798,7 @@ class ChatWidget(QWidget):
             state["action"] = "recovering"
             if state.get("_last_action_shown") != "recovering":
                 state["_last_action_shown"] = "recovering"
-                return False, "Recovering from a response error…"
+                return False, "Recovering from a response error..."
             return False, None
 
         if "verification screenshot failed" in low:
@@ -695,7 +806,7 @@ class ChatWidget(QWidget):
             state["action"] = "verifying"
             if state.get("_last_action_shown") != "verifying":
                 state["_last_action_shown"] = "verifying"
-                return False, "Couldn’t verify visually; continuing…"
+                return False, "Couldn't verify visually; continuing..."
             return False, None
 
         if "trusting task completion" in low:
@@ -787,7 +898,7 @@ class ChatWidget(QWidget):
             self.input_field.clear()
             # Reset placeholder if it was changed for guidance
             if self._guidance_input_active or self._guidance_active:
-                self.input_field.setPlaceholderText("> Type a command...")
+                self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
             # Check for new conversational guidance input first
             if self._send_guidance_input(text):
                 return
@@ -874,7 +985,7 @@ class ChatWidget(QWidget):
             bubble_bg = QColor("#091521")
             char_format.setForeground(text_color)
             char_format.setBackground(bubble_bg)
-            display_text = f"✓ {text}"
+            display_text = f"[OK] {text}"
         else:
             display_text = text
 
@@ -902,7 +1013,7 @@ class ChatWidget(QWidget):
         link.setAnchor(True)
         link.setAnchorHref(f"pp://thinking/toggle/{thinking_id}")
         link.setUnderlineStyle(QTextCharFormat.UnderlineStyle.NoUnderline)
-        chevron = "▾" if expanded else "▸"
+        chevron = "v" if expanded else ">"
         cursor.insertText(f"{title} {chevron}", link)
         cursor.insertBlock()
 
@@ -937,7 +1048,7 @@ class ChatWidget(QWidget):
 
             # Show only a small, friendly recent trail.
             for l in lines[-12:]:
-                body_lines.append(f"• {l}")
+                body_lines.append(f"- {l}")
 
             cursor.insertText("\n".join(body_lines).strip(), body_char)
             cursor.insertBlock()
@@ -987,13 +1098,13 @@ class ChatWidget(QWidget):
 
     def on_listening_status(self, listening):
         if listening:
-            self.mic_btn.setText("■")
+            self.mic_btn.setText("Stop")
             self.mic_btn.setToolTip("Stop listening")
-            self.input_field.setPlaceholderText("> Listening...")
+            self.input_field.setPlaceholderText("Listening...")
         else:
-            self.mic_btn.setText("🎤")
+            self.mic_btn.setText("Mic")
             self.mic_btn.setToolTip("Start listening")
-            self.input_field.setPlaceholderText("> Type a command...")
+            self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
         self._apply_view_mode()
 
     def on_speech_text(self, text):
@@ -1144,7 +1255,7 @@ class ChatWidget(QWidget):
         title = (title or "").strip()
         if not title:
             return
-        self._append_to_model(kind="section", text=f"— {title} —")
+        self._append_to_model(kind="section", text=f"--- {title} ---")
 
     def add_error_message(self, message):
         self._append_to_model(kind="error", text=str(message))
@@ -1155,74 +1266,58 @@ class ChatWidget(QWidget):
             self.mode_combo.setToolTip(tip)
 
     def set_view_mode(self, mode):
-        self.view_mode = mode
-        if mode == "mini":
-            if self.audio_service.is_listening:
-                self.audio_service.stop_listening()
+        mode_key = (mode or "").strip().lower()
+        if mode_key not in {"bar_only", "extended"}:
+            mode_key = "bar_only"
+        self.view_mode = mode_key
+        if self.view_mode == "bar_only" and self.audio_service.is_listening:
+            self.audio_service.stop_listening()
         self._apply_view_mode()
 
     def _apply_view_mode(self):
         listening = self.audio_service.is_listening
-        if self.view_mode == "mini":
-            self.chat_display.hide()
-            self.input_frame.hide()
-            self.input_hint.hide()
-            self.dropdowns.hide()
-            self.workspace_badge.hide()
+        expanded = self.view_mode == "extended"
+
+        self.extended_panel.setVisible(expanded)
+        self.expand_btn.setText("Hide" if expanded else "Details")
+
+        show_agent = bool(expanded and self._agent_view_enabled and self._agent_view_requested)
+        self.agent_below_container.setVisible(show_agent)
+        self.agent_preview.set_active(show_agent)
+        if self._agent_view_enabled:
+            self.agent_view_btn.setText("Hide Agent" if show_agent else "Agent View")
+        else:
+            self.agent_view_btn.setText("Agent View")
+
+        if not expanded:
             self.voice_visualizer.hide()
             self.voice_visualizer.set_active(False)
             self.compact_stop_btn.hide()
             self.guidance_bar.hide()
             self.guidance_btn.hide()
-            self.footer.hide()
-            if self.header.layout():
-                self.header.layout().invalidate()
-                self.header.layout().activate()
+            self.continue_btn.hide()
             return
 
-        if self.view_mode == "compact":
-            self.dropdowns.show()
-            self.workspace_badge.show()
-            self.footer.show()
-            if listening:
-                self.chat_display.hide()
-                self.input_frame.hide()
-                self.input_hint.hide()
-                self.voice_visualizer.show()
-                self.voice_visualizer.set_active(True)
-                self.compact_stop_btn.show()
-                self.guidance_bar.hide()
-                self.guidance_btn.hide()
-            else:
-                self.chat_display.show()
-                self.input_frame.show()
-                if self.chat_display.toPlainText().strip():
-                    self.input_hint.hide()
-                else:
-                    self.input_hint.show()
-                if self._guidance_active or self._guidance_input_active:
-                    self.guidance_bar.show()
-                    self.guidance_btn.show()
-                else:
-                    self.guidance_bar.hide()
-                    self.guidance_btn.hide()
-                    self.continue_btn.hide()
-                self.voice_visualizer.hide()
-                self.voice_visualizer.set_active(False)
-                self.compact_stop_btn.hide()
+        if listening:
+            self.chat_display.hide()
+            self.input_hint.hide()
+            self.voice_visualizer.show()
+            self.voice_visualizer.set_active(True)
+            self.compact_stop_btn.show()
+            self.guidance_bar.hide()
+            self.guidance_btn.hide()
+            self.continue_btn.hide()
             return
 
-        # full
         self.chat_display.show()
-        self.input_frame.show()
         if self.chat_display.toPlainText().strip():
             self.input_hint.hide()
         else:
             self.input_hint.show()
-        self.dropdowns.show()
-        self.workspace_badge.show()
-        self.footer.show()
+        self.voice_visualizer.hide()
+        self.voice_visualizer.set_active(False)
         self.compact_stop_btn.hide()
+
         if self._guidance_active or self._guidance_input_active:
             self.guidance_bar.show()
             self.guidance_btn.show()
@@ -1230,16 +1325,6 @@ class ChatWidget(QWidget):
             self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.continue_btn.hide()
-        if listening:
-            self.voice_visualizer.show()
-            self.voice_visualizer.set_active(True)
-        else:
-            self.voice_visualizer.hide()
-            self.voice_visualizer.set_active(False)
-
-        if self.header.layout():
-            self.header.layout().invalidate()
-            self.header.layout().activate()
 
     def _hide_input_hint(self):
         if self.input_hint.isVisible():
@@ -1283,9 +1368,9 @@ class ChatWidget(QWidget):
         self._guidance_input_active = True
         label = (payload.get("label") or "Next").strip() or "Next"
         if payload.get("final"):
-            self.input_field.setPlaceholderText("> Click Done to finish or type a reply...")
+            self.input_field.setPlaceholderText("Click Done to finish or type a reply...")
         else:
-            self.input_field.setPlaceholderText("> Type 'done', ask a question, or describe what happened...")
+            self.input_field.setPlaceholderText("Type 'done', ask a question, or describe what happened...")
         self.guidance_btn.setText(label)
         self.guidance_btn.setEnabled(True)
         
@@ -1308,7 +1393,7 @@ class ChatWidget(QWidget):
             self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.continue_btn.hide()
-            self.input_field.setPlaceholderText("> Type a command...")
+            self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
             # Set "done" as the default input when clicking Next
             self._start_turn()
             self.add_activity_message("Planning next step...")
@@ -1340,7 +1425,7 @@ class ChatWidget(QWidget):
             self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.continue_btn.hide()
-            self.input_field.setPlaceholderText("> Type a command...")
+            self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
             
             self._start_turn()
             self.add_activity_message("Continuing task...")

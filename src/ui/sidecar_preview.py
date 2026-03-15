@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Optional
 
 from PySide6.QtCore import QTimer, Qt, QPoint, QObject, Signal, QThread, QSize, Slot
 from PySide6.QtGui import QPixmap, QImage, QGuiApplication
-from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QSizeGrip
+from PySide6.QtWidgets import QWidget, QLabel, QVBoxLayout, QSizeGrip, QFrame
 
 if TYPE_CHECKING:
     from desktop.desktop_manager import AgentDesktopManager
@@ -53,6 +53,126 @@ class CaptureWorker(QObject):
             self.image_captured.emit(scaled)
         except Exception as e:
             logger.debug(f"Worker capture error: {e}")
+
+
+class EmbeddedAgentPreview(QFrame):
+    """
+    Embedded, in-window agent desktop preview used by the expanded panel.
+
+    Unlike SidecarPreview, this widget does not create its own top-level window.
+    """
+
+    request_capture = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None, fps: int = 10):
+        super().__init__(parent)
+        self.fps = max(1, int(fps or 10))
+        self.desktop_manager: Optional["AgentDesktopManager"] = None
+        self._active = False
+
+        self.capture_thread = QThread()
+        self.worker: Optional[CaptureWorker] = None
+
+        self._setup_ui()
+        self._setup_timer()
+
+    def _setup_ui(self):
+        self.setObjectName("embeddedAgentPreview")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.preview_label = QLabel("Agent view unavailable")
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setMinimumHeight(180)
+        self.preview_label.setStyleSheet(
+            """
+            QLabel {
+                background: #111827;
+                color: #93a3b8;
+                border: 1px solid #263447;
+                border-radius: 12px;
+                padding: 10px;
+            }
+            """
+        )
+        layout.addWidget(self.preview_label)
+
+    def _setup_timer(self):
+        self.refresh_timer = QTimer(self)
+        self.refresh_timer.timeout.connect(self._request_frame)
+        self.refresh_timer.setInterval(int(1000 / self.fps))
+
+    def _teardown_worker(self):
+        if self.worker is not None:
+            try:
+                self.request_capture.disconnect(self.worker.process_frame)
+            except Exception:
+                pass
+            try:
+                self.worker.image_captured.disconnect(self._update_preview)
+            except Exception:
+                pass
+            self.worker = None
+
+        if self.capture_thread.isRunning():
+            self.capture_thread.quit()
+            self.capture_thread.wait()
+
+    def set_capture_source(self, desktop_manager: Optional["AgentDesktopManager"]):
+        self.desktop_manager = desktop_manager
+        self._teardown_worker()
+
+        if not desktop_manager:
+            self.preview_label.setPixmap(QPixmap())
+            self.preview_label.setText("Agent view unavailable")
+            self.refresh_timer.stop()
+            return
+
+        self.worker = CaptureWorker(desktop_manager)
+        self.worker.moveToThread(self.capture_thread)
+        self.worker.image_captured.connect(self._update_preview)
+        self.request_capture.connect(self.worker.process_frame)
+        self.capture_thread.start()
+
+        if self._active and self.isVisible():
+            self.refresh_timer.start()
+
+    def set_active(self, active: bool):
+        self._active = bool(active)
+        if not self._active:
+            self.refresh_timer.stop()
+            return
+
+        if self.desktop_manager and self.isVisible():
+            self.refresh_timer.start()
+
+    def _request_frame(self):
+        if not self.worker or not self.desktop_manager:
+            return
+        self.worker.target_size = self.preview_label.size()
+        self.request_capture.emit()
+
+    @Slot(QPixmap)
+    def _update_preview(self, pixmap: QPixmap):
+        self.preview_label.setText("")
+        self.preview_label.setPixmap(pixmap)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._active and self.desktop_manager:
+            self.refresh_timer.start()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self.refresh_timer.stop()
+
+    def closeEvent(self, event):
+        self.refresh_timer.stop()
+        self._teardown_worker()
+        super().closeEvent(event)
 
 
 class SidecarPreview(QWidget):

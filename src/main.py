@@ -2,10 +2,9 @@ import sys
 import os
 import ctypes
 import logging
-from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtWidgets import QApplication, QSplashScreen, QSystemTrayIcon, QMenu
 from PySide6.QtCore import qInstallMessageHandler, Qt
-from PySide6.QtGui import QPixmap, QShortcut, QKeySequence, QPainter, QColor
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtGui import QPixmap, QShortcut, QKeySequence, QPainter, QColor, QAction, QIcon
 from PySide6.QtSvg import QSvgRenderer
 from dotenv import load_dotenv
 from config import Config
@@ -116,14 +115,21 @@ def main():
         if not require_login():
             print("Login cancelled. Exiting.")
             sys.exit(0)
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.ico")
-    if not os.path.exists(logo_path):
-        logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logos", "pixelpilot-logo-creative.svg")
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    splash_logo_path = os.path.join(base_dir, "logos", "pixelpilot-logo-creative.ico")
+    if not os.path.exists(splash_logo_path):
+        splash_logo_path = os.path.join(base_dir, "logos", "pixelpilot-logo-creative.svg")
+
+    task_icon_path = os.path.join(base_dir, "logos", "pixelpilot-icon.ico")
+    if not os.path.exists(task_icon_path):
+        task_icon_path = os.path.join(base_dir, "logos", "pixelpilot-icon.svg")
+    if not os.path.exists(task_icon_path):
+        task_icon_path = splash_logo_path
 
     splash = None
-    if os.path.exists(logo_path):
-        if logo_path.endswith(".svg"):
-            renderer = QSvgRenderer(logo_path)
+    if os.path.exists(splash_logo_path):
+        if splash_logo_path.endswith(".svg"):
+            renderer = QSvgRenderer(splash_logo_path)
             if renderer.isValid():
                 pixmap = QPixmap(800, 300)
                 pixmap.fill(QColor("transparent"))
@@ -132,7 +138,7 @@ def main():
                 painter.end()
                 splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
         else:
-            pixmap = QPixmap(logo_path)
+            pixmap = QPixmap(splash_logo_path)
             if not pixmap.isNull():
                  splash = QSplashScreen(pixmap, Qt.WindowStaysOnTopHint)
 
@@ -187,6 +193,8 @@ def main():
         dialog.exec()
 
     window = MainWindow()
+    if os.path.exists(task_icon_path):
+        window.setWindowIcon(QIcon(task_icon_path))
     
     adapter = GuiAdapter()
     controller = MainController(adapter, window)
@@ -231,6 +239,43 @@ def main():
 
     window.chat_widget.logout_btn.clicked.connect(handle_logout)
 
+    # System tray (background minimize/restore)
+    tray = None
+    if QSystemTrayIcon.isSystemTrayAvailable():
+        tray = QSystemTrayIcon(window)
+        tray.setToolTip("Pixel Pilot")
+        if os.path.exists(task_icon_path):
+            tray.setIcon(QIcon(task_icon_path))
+        else:
+            tray.setIcon(window.windowIcon())
+
+        tray_menu = QMenu()
+        show_action = QAction("Show Pixel Pilot", tray_menu)
+        hide_action = QAction("Hide to Background", tray_menu)
+        quit_action = QAction("Quit", tray_menu)
+
+        show_action.triggered.connect(window.restore_from_background)
+        hide_action.triggered.connect(window.minimize_to_background)
+        quit_action.triggered.connect(QApplication.quit)
+
+        tray_menu.addAction(show_action)
+        tray_menu.addAction(hide_action)
+        tray_menu.addSeparator()
+        tray_menu.addAction(quit_action)
+        tray.setContextMenu(tray_menu)
+
+        def _on_tray_activated(reason):
+            if reason in (
+                QSystemTrayIcon.ActivationReason.Trigger,
+                QSystemTrayIcon.ActivationReason.DoubleClick,
+            ):
+                window.restore_from_background()
+
+        tray.activated.connect(_on_tray_activated)
+        tray.show()
+
+    window._system_tray = tray
+
     # Global shortcuts
     # Keep references; otherwise Python GC can deactivate QShortcut.
     window._qt_shortcuts = []
@@ -250,6 +295,11 @@ def main():
     close_app.activated.connect(QApplication.quit)
     window._qt_shortcuts.append(close_app)
 
+    background_toggle = QShortcut(QKeySequence("Ctrl+Shift+M"), window)
+    background_toggle.setContext(Qt.ShortcutContext.ApplicationShortcut)
+    background_toggle.activated.connect(window.toggle_background_visibility)
+    window._qt_shortcuts.append(background_toggle)
+
     # Windows system-wide hotkeys (work even when the overlay is click-through/unfocused)
     hotkeys = GlobalHotkeyManager(parent=window)
     window._global_hotkeys = hotkeys
@@ -257,10 +307,12 @@ def main():
     HK_TOGGLE = 1
     HK_STOP = 2
     HK_CLOSE = 3
+    HK_BACKGROUND = 4
 
     hotkeys.register(HK_TOGGLE, modifiers=MOD_CONTROL | MOD_SHIFT, vk=ord("Z"))
     hotkeys.register(HK_STOP, modifiers=MOD_CONTROL | MOD_SHIFT, vk=ord("X"))
     hotkeys.register(HK_CLOSE, modifiers=MOD_CONTROL | MOD_SHIFT, vk=ord("Q"))
+    hotkeys.register(HK_BACKGROUND, modifiers=MOD_CONTROL | MOD_SHIFT, vk=ord("M"))
 
     def _on_hotkey(hotkey_id: int):
         if hotkey_id == HK_TOGGLE:
@@ -269,6 +321,8 @@ def main():
             controller.stop_current_request()
         elif hotkey_id == HK_CLOSE:
             QApplication.quit()
+        elif hotkey_id == HK_BACKGROUND:
+            window.toggle_background_visibility()
 
     hotkeys.activated.connect(_on_hotkey)
     

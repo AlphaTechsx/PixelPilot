@@ -1,42 +1,40 @@
-from typing import Optional
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtGui import QCursor, QGuiApplication
+from PySide6.QtWidgets import QApplication, QMainWindow
 
-from PySide6.QtWidgets import QMainWindow, QApplication
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QGuiApplication, QCursor
-from .chat_widget import ChatWidget
 from config import Config
+from .chat_widget import ChatWidget
 
 
 class MainWindow(QMainWindow):
-    FULL_SIZE = (460, 480)
-    COMPACT_SIZE = (460, 240)
-    MINI_SIZE = (160, 60)
-    
+    BAR_SIZE = (880, 84)
+    EXTENDED_SIZE = (880, 660)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Pixel Pilot")
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
-        self.expanded = True
-        self.minimized = False
-        self.last_size = self.FULL_SIZE
-        self.old_pos = None
 
+        self.old_pos: QPoint | None = None
         self.click_through_enabled = False
-        
-        # Sidecar preview (set by controller)
-        self.sidecar: Optional["SidecarPreview"] = None
-        
+        self.expanded = False
+        self._background_hidden = False
+
         self.chat_widget = ChatWidget()
         self.setCentralWidget(self.chat_widget)
-        self.setFixedSize(*self.FULL_SIZE)
-        self.chat_widget.set_view_mode("full")
-        
+        self.setFixedSize(*self.BAR_SIZE)
+        self.chat_widget.set_view_mode("bar_only")
+
         self.chat_widget.expand_btn.clicked.connect(self.toggle_expand)
-        self.chat_widget.minimize_btn.clicked.connect(self.toggle_minimize)
+        self.chat_widget.minimize_btn.clicked.connect(self.minimize_to_background)
         self.chat_widget.close_btn.clicked.connect(QApplication.quit)
-        
+        self.chat_widget.agent_view_btn.clicked.connect(self._ensure_extended_for_agent_view)
+
         self.center_at_top()
 
     def set_click_through_enabled(self, enable: bool):
@@ -62,35 +60,61 @@ class MainWindow(QMainWindow):
         y = geo.y() + 30
         self.move(x, y)
 
-    def toggle_minimize(self):
-        if not self.minimized:
-            self.last_size = (self.width(), self.height())
-            self.setFixedSize(*self.MINI_SIZE)
-            self.chat_widget.set_view_mode("mini")
-            self.chat_widget.expand_btn.hide()
-            self.chat_widget.minimize_btn.setText("+")
-            self.minimized = True
-        else:
-            self.setFixedSize(*self.last_size)
-            if self.expanded:
-                self.chat_widget.set_view_mode("full")
-            else:
-                self.chat_widget.set_view_mode("compact")
-            self.chat_widget.expand_btn.show()
-            self.chat_widget.minimize_btn.setText("−")
-            self.minimized = False
+    def _clamp_to_screen(self):
+        screen = self.screen() or QGuiApplication.screenAt(self.pos()) or QApplication.primaryScreen()
+        if not screen:
+            return
+        geo = screen.availableGeometry()
+        x = min(max(self.x(), geo.left()), max(geo.left(), geo.right() - self.width() + 1))
+        y = min(max(self.y(), geo.top()), max(geo.top(), geo.bottom() - self.height() + 1))
+        self.move(x, y)
+
+    def _resize_for_state(self, *, expanded: bool):
+        old_h = self.height()
+        old_w = self.width()
+        target_w, target_h = self.EXTENDED_SIZE if expanded else self.BAR_SIZE
+        if target_w == old_w and target_h == old_h:
+            return
+
+        self.setFixedSize(target_w, target_h)
+        self._clamp_to_screen()
+
+    def set_expanded(self, expanded: bool):
+        expanded = bool(expanded)
+        if self.expanded == expanded:
+            self.chat_widget.set_expanded(expanded)
+            return
+
+        self._resize_for_state(expanded=expanded)
+        self.expanded = expanded
+        self.chat_widget.set_expanded(expanded)
 
     def toggle_expand(self):
-        if self.minimized:
+        if self._background_hidden:
+            self.restore_from_background()
+            self.set_expanded(True)
             return
-        if self.expanded:
-            self.setFixedSize(*self.COMPACT_SIZE)
-            self.expanded = False
-            self.chat_widget.set_view_mode("compact")
+        self.set_expanded(not self.expanded)
+
+    def _ensure_extended_for_agent_view(self):
+        if self.chat_widget.agent_view_btn.isEnabled() and not self.expanded:
+            self.set_expanded(True)
+
+    def minimize_to_background(self):
+        self._background_hidden = True
+        self.hide()
+
+    def restore_from_background(self):
+        self._background_hidden = False
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
+    def toggle_background_visibility(self):
+        if self._background_hidden or not self.isVisible():
+            self.restore_from_background()
         else:
-            self.setFixedSize(*self.FULL_SIZE)
-            self.expanded = True
-            self.chat_widget.set_view_mode("full")
+            self.minimize_to_background()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
@@ -104,34 +128,3 @@ class MainWindow(QMainWindow):
 
     def mouseReleaseEvent(self, event):
         self.old_pos = None
-
-    def moveEvent(self, event):
-        """Reposition sidecar when main window moves."""
-        super().moveEvent(event)
-        if self.sidecar:
-            self.sidecar.reattach()
-
-    def resizeEvent(self, event):
-        """Reposition sidecar when main window is resized."""
-        super().resizeEvent(event)
-        if self.sidecar:
-            self.sidecar.reattach()
-
-    def showEvent(self, event):
-        """Show sidecar when main window is shown."""
-        super().showEvent(event)
-        if self.sidecar:
-            if self.sidecar.isVisible():
-                self.sidecar.reattach()
-
-    def hideEvent(self, event):
-        """Hide sidecar when main window is hidden."""
-        super().hideEvent(event)
-        if self.sidecar:
-            self.sidecar.hide()
-
-    def closeEvent(self, event):
-        """Clean up sidecar when closing."""
-        if self.sidecar:
-            self.sidecar.close()
-        super().closeEvent(event)

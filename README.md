@@ -55,8 +55,15 @@ This is useful for operations teams, power users, accessibility workflows, QA/te
 ### Workspace Isolation
 - **Agent Desktop**: dedicated hidden desktop with custom minimal shell.
 - **Dual-workspace UIA observation**: blind mode can inspect both the live `user` desktop and the isolated `agent` desktop.
-- **Sidecar preview**: real-time capture preview when working in agent workspace.
+- **Embedded Agent View**: real-time capture preview shown inside the main GUI (not a floating sidecar window).
 - **Process tracking**: spawned processes on agent desktop are tracked and cleaned up on shutdown.
+
+### Desktop GUI
+- **Simple bar first**: compact rounded search/action bar as the default UI.
+- **Expanded layout**: `Details` panel appears above the search bar.
+- **Agent panel placement**: `Agent View` appears below the search bar when enabled/toggled.
+- **Workspace-aware Agent View**: Agent View button is visible but disabled on `user` workspace; enabled on `agent` workspace.
+- **Background minimize**: minimize hides the app to background/system tray while tasks keep running.
 
 ### Skills + OS Integration
 - **Skills**: `media`, `browser`, `system`, `timer`.
@@ -216,6 +223,13 @@ Expected message shape:
 - `Ctrl+Shift+Z`: Toggle click-through
 - `Ctrl+Shift+X`: Stop current request
 - `Ctrl+Shift+Q`: Quit app
+- `Ctrl+Shift+M`: Hide/restore app (background minimize toggle)
+
+## Tray Behavior
+
+- Minimize hides PixelPilot to the system tray (background mode).
+- Tray menu includes `Show Pixel Pilot`, `Hide to Background`, and `Quit`.
+- Tray/task icon uses `pixelpilot-icon` (`src/logos/pixelpilot-icon.ico` when available).
 
 
 ## System Capabilities
