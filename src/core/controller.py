@@ -37,6 +37,8 @@ class MainController(QObject):
         self.agent = None
         self.worker = None
         self._stop_requested = False
+        self.live_session = None
+        self.live_mode_enabled = False
         
         self.desktop_manager = None
 
@@ -81,9 +83,41 @@ class MainController(QObject):
             if self.desktop_manager:
                 self.agent.desktop_manager = self.desktop_manager
 
+            self._init_live_session()
             self.update_sidecar_visibility()
         except Exception as e:
             self.gui_adapter.add_error_message(f"Failed to initialize agent: {e}")
+
+    def _init_live_session(self):
+        if self.live_session:
+            try:
+                self.live_session.shutdown()
+            except Exception:
+                pass
+            self.live_session = None
+
+        try:
+            from live.session import LiveSessionManager
+
+            self.live_session = LiveSessionManager(agent=self.agent)
+            self.live_session.transcript_received.connect(self._handle_live_transcript)
+            self.live_session.session_state_changed.connect(self._handle_live_session_state)
+            self.live_session.action_state_changed.connect(self._handle_live_action_state)
+            self.live_session.error_received.connect(self._handle_live_error)
+            self.live_session.audio_level_changed.connect(self._handle_live_audio_level)
+            self.live_session.assistant_audio_level_changed.connect(self._handle_live_assistant_audio_level)
+            self.live_session.availability_changed.connect(self._handle_live_availability)
+            self.live_session.voice_active_changed.connect(self._handle_live_voice_active)
+
+            available = bool(getattr(self.live_session, "is_available", False))
+            reason = str(getattr(self.live_session, "unavailable_reason", "") or "")
+            self._handle_live_availability(available, reason)
+            self._handle_live_session_state("disconnected")
+        except Exception as exc:
+            logger.exception("Failed to initialize Gemini Live session")
+            self.live_session = None
+            self.live_mode_enabled = False
+            self._handle_live_availability(False, str(exc))
 
     def init_sidecar(self):
         """Initialize Agent Desktop and bind capture source for embedded preview."""
@@ -181,6 +215,16 @@ class MainController(QObject):
             self.gui_adapter.add_error_message("Agent not initialized.")
             return
 
+        if self.live_mode_enabled and self.live_session and self.live_session.enabled:
+            if self.worker and self.worker.isRunning():
+                self.gui_adapter.add_error_message(
+                    "A standard task is still running. Stop it before sending Gemini Live input."
+                )
+                return
+            if not self.live_session.submit_text(text):
+                self.gui_adapter.add_error_message("Failed to send input to Gemini Live.")
+            return
+
         self.gui_adapter.add_activity_message(f"Executing: {text}")
         
         self.update_sidecar_visibility()
@@ -192,12 +236,20 @@ class MainController(QObject):
     def stop_current_request(self):
         """Attempt to stop the currently running agent task."""
 
+        live_stopped = False
+        if self.live_mode_enabled and self.live_session and self.live_session.enabled:
+            self.gui_adapter.add_activity_message("Stopping...")
+            self.live_session.request_stop()
+            live_stopped = True
+
         if not self.worker or not self.worker.isRunning():
-            self.gui_adapter.add_activity_message("Nothing to stop")
+            if not live_stopped:
+                self.gui_adapter.add_activity_message("Nothing to stop")
             return
 
         self._stop_requested = True
-        self.gui_adapter.add_activity_message("Stopping...")
+        if not live_stopped:
+            self.gui_adapter.add_activity_message("Stopping...")
 
         try:
             if hasattr(self.agent, "request_stop"):
@@ -245,6 +297,12 @@ class MainController(QObject):
                 except Exception:
                     pass
 
+            if self.live_session:
+                try:
+                    self.live_session.shutdown()
+                except Exception:
+                    pass
+
             if self.desktop_manager:
                 try:
                     self.desktop_manager.close_all_windows(timeout=1.5)
@@ -283,6 +341,8 @@ class MainController(QObject):
         if not self.agent:
             return
 
+        workspace = (workspace or "user").strip().lower() or "user"
+
         try:
             if self.main_window and hasattr(self.main_window, "chat_widget"):
                 self.main_window.chat_widget.set_workspace_status(workspace)
@@ -296,6 +356,12 @@ class MainController(QObject):
                 self.main_window.set_click_through_enabled(False)
         except Exception:
             pass
+
+        if self.live_session:
+            try:
+                self.live_session.notify_workspace_changed(workspace)
+            except Exception:
+                pass
 
         self.update_sidecar_visibility()
 
@@ -356,3 +422,75 @@ class MainController(QObject):
             self.main_window.chat_widget.set_agent_preview_source(source)
         except Exception:
             pass
+
+    @Slot(bool)
+    def handle_live_mode_changed(self, enabled: bool):
+        if not self.live_session:
+            self.gui_adapter.add_error_message("Gemini Live is unavailable.")
+            return
+
+        success = self.live_session.set_enabled(bool(enabled))
+        self.live_mode_enabled = bool(enabled and success)
+        if self.live_mode_enabled and self.agent:
+            try:
+                self.live_session.notify_workspace_changed(self.agent.active_workspace)
+            except Exception:
+                pass
+        try:
+            if self.main_window and hasattr(self.main_window, "chat_widget"):
+                self.main_window.chat_widget.set_live_enabled(self.live_mode_enabled)
+        except Exception:
+            pass
+
+    @Slot(bool)
+    def handle_live_voice_toggled(self, enabled: bool):
+        if not self.live_session or not self.live_mode_enabled:
+            return
+
+        if enabled:
+            if not self.live_session.start_voice():
+                self.gui_adapter.add_error_message("Failed to start Gemini Live voice session.")
+                self._handle_live_voice_active(False)
+        else:
+            self.live_session.stop_voice()
+            self._handle_live_voice_active(False)
+
+    @Slot(str, str, bool)
+    def _handle_live_transcript(self, speaker: str, text: str, final: bool):
+        self.gui_adapter.update_live_transcript(speaker, text, final)
+
+    @Slot(str)
+    def _handle_live_session_state(self, state: str):
+        self.gui_adapter.update_live_session_state(state)
+
+    @Slot(object)
+    def _handle_live_action_state(self, payload: object):
+        if isinstance(payload, dict):
+            self.gui_adapter.update_live_action_state(payload)
+
+    @Slot(str)
+    def _handle_live_error(self, message: str):
+        self.gui_adapter.add_error_message(message)
+
+    @Slot(float)
+    def _handle_live_audio_level(self, level: float):
+        self.gui_adapter.update_live_audio_level(level)
+
+    @Slot(float)
+    def _handle_live_assistant_audio_level(self, level: float):
+        self.gui_adapter.update_assistant_audio_level(level)
+
+    @Slot(bool, str)
+    def _handle_live_availability(self, available: bool, reason: str):
+        if not available:
+            self.live_mode_enabled = False
+        self.gui_adapter.update_live_availability(available, reason)
+        try:
+            if self.main_window and hasattr(self.main_window, "chat_widget"):
+                self.main_window.chat_widget.set_live_availability(available, reason)
+        except Exception:
+            pass
+
+    @Slot(bool)
+    def _handle_live_voice_active(self, active: bool):
+        self.gui_adapter.update_live_voice_active(active)

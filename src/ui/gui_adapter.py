@@ -11,6 +11,13 @@ class GuiAdapter(QObject):
     guidance_next_requested = Signal(str, object)
     guidance_input_requested = Signal(object) 
     workspace_changed = Signal(str)
+    live_transcript_received = Signal(str, str, bool)
+    live_session_state_received = Signal(str)
+    live_action_state_received = Signal(object)
+    live_audio_level_received = Signal(float)
+    assistant_audio_level_received = Signal(float)
+    live_availability_received = Signal(bool, str)
+    live_voice_active_received = Signal(bool)
     
 
     confirmation_requested = Signal(str, str, object) 
@@ -50,6 +57,27 @@ class GuiAdapter(QObject):
 
     def notify_workspace_changed(self, workspace: str):
         self.workspace_changed.emit(workspace)
+
+    def update_live_transcript(self, speaker: str, text: str, final: bool):
+        self.live_transcript_received.emit(speaker, text, final)
+
+    def update_live_session_state(self, state: str):
+        self.live_session_state_received.emit(state)
+
+    def update_live_action_state(self, payload: dict):
+        self.live_action_state_received.emit(payload)
+
+    def update_live_audio_level(self, level: float):
+        self.live_audio_level_received.emit(float(level))
+
+    def update_assistant_audio_level(self, level: float):
+        self.assistant_audio_level_received.emit(float(level))
+
+    def update_live_availability(self, available: bool, reason: str):
+        self.live_availability_received.emit(bool(available), str(reason or ""))
+
+    def update_live_voice_active(self, active: bool):
+        self.live_voice_active_received.emit(bool(active))
 
     def ask_confirmation(self, title, text):
         event = threading.Event()

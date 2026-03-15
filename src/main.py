@@ -206,6 +206,13 @@ def main():
     adapter.user_message_received.connect(window.chat_widget.add_user_message)
     adapter.activity_message_received.connect(window.chat_widget.add_activity_message)
     adapter.final_answer_received.connect(window.chat_widget.add_final_answer)
+    adapter.live_transcript_received.connect(window.chat_widget.on_live_transcript)
+    adapter.live_session_state_received.connect(window.chat_widget.set_live_session_state)
+    adapter.live_action_state_received.connect(window.chat_widget.on_live_action_state)
+    adapter.live_audio_level_received.connect(window.chat_widget.on_live_audio_level)
+    adapter.assistant_audio_level_received.connect(window.chat_widget.on_assistant_audio_level)
+    adapter.live_availability_received.connect(window.chat_widget.set_live_availability)
+    adapter.live_voice_active_received.connect(window.chat_widget.set_live_voice_active)
 
     # Attach GUI logging now that adapter exists.
     attach_gui_logging(logger, adapter, buffered_gui)
@@ -221,6 +228,8 @@ def main():
     window.chat_widget.command_received.connect(controller.handle_user_command)
     window.chat_widget.mode_changed.connect(controller.handle_mode_changed)
     window.chat_widget.vision_changed.connect(controller.handle_vision_changed)
+    window.chat_widget.live_mode_changed.connect(controller.handle_live_mode_changed)
+    window.chat_widget.live_voice_toggled.connect(controller.handle_live_voice_toggled)
 
     # Logout handler
     def handle_logout():

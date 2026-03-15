@@ -15,12 +15,32 @@ class OperationMode(Enum):
 logger = logging.getLogger("pixelpilot.config")
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 class Config:
     BACKEND_URL = os.getenv("BACKEND_URL", "https://pixel-pilot-5jpy.onrender.com")
     GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     GEMINI_BASE_MODEL = os.getenv("GEMINI_BASE_MODEL", GEMINI_MODEL).strip() or GEMINI_MODEL
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     USE_DIRECT_API = bool(GEMINI_API_KEY)
+    ENABLE_GEMINI_LIVE_MODE = _env_bool("ENABLE_GEMINI_LIVE_MODE", True)
+    GEMINI_LIVE_MODEL = os.getenv(
+        "GEMINI_LIVE_MODEL",
+        "gemini-2.5-flash-native-audio-preview-12-2025",
+    ).strip() or "gemini-2.5-flash-native-audio-preview-12-2025"
+    LIVE_VIDEO_FPS = max(1, int(os.getenv("LIVE_VIDEO_FPS", "1") or "1"))
+    LIVE_AUDIO_INPUT_RATE = max(8000, int(os.getenv("LIVE_AUDIO_INPUT_RATE", "16000") or "16000"))
+    LIVE_AUDIO_OUTPUT_RATE = max(8000, int(os.getenv("LIVE_AUDIO_OUTPUT_RATE", "24000") or "24000"))
+    LIVE_VIDEO_MAX_SECONDS_BEFORE_ROTATE = max(
+        30,
+        int(os.getenv("LIVE_VIDEO_MAX_SECONDS_BEFORE_ROTATE", "105") or "105"),
+    )
+    LIVE_MODE_AVAILABLE = bool(ENABLE_GEMINI_LIVE_MODE and USE_DIRECT_API)
 
     DEFAULT_MODE = OperationMode(os.getenv("DEFAULT_MODE", OperationMode.AUTO.value))
     VISION_MODE = os.getenv("VISION_MODE", "ocr").strip().lower()
@@ -186,6 +206,7 @@ class Config:
         """Clears the GEMINI_API_KEY from environment and .env file."""
         cls.GEMINI_API_KEY = None
         cls.USE_DIRECT_API = False
+        cls.LIVE_MODE_AVAILABLE = bool(cls.ENABLE_GEMINI_LIVE_MODE and cls.USE_DIRECT_API)
         os.environ.pop("GEMINI_API_KEY", None)
 
         env_path = cls.PROJECT_ROOT / ".env"

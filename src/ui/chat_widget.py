@@ -18,15 +18,25 @@ from PySide6.QtGui import QColor, QTextBlockFormat, QTextCharFormat, QTextCursor
 from PySide6.QtSvgWidgets import QSvgWidget
 
 from services.audio import AudioService
-from .voice_visualizer import VoiceVisualizer
+from .animated_mic_button import AnimatedMicButton
 from .sidecar_preview import EmbeddedAgentPreview
 from config import OperationMode, Config
+
+
+DEFAULT_INPUT_PROMPT = "Ask Pixel Pilot to do anything..."
+LISTENING_INPUT_PROMPT = "Listening..."
+LIVE_IDLE_INPUT_PROMPT = "Type or speak to Gemini Live..."
+LIVE_VOICE_INPUT_PROMPT = "Live voice active..."
+GUIDANCE_FINAL_PROMPT = "Click Done to finish or type a reply..."
+GUIDANCE_INPUT_PROMPT = "Type 'done', ask a question, or describe what happened..."
 
 
 class ChatWidget(QWidget):
     command_received = Signal(str)
     mode_changed = Signal(object)
     vision_changed = Signal(str)
+    live_mode_changed = Signal(bool)
+    live_voice_toggled = Signal(bool)
 
     def __init__(self):
         super().__init__()
@@ -42,6 +52,7 @@ class ChatWidget(QWidget):
 
         self.send_btn.clicked.connect(self.send_message)
         self.input_field.returnPressed.connect(self.send_message)
+        self.input_field.textEdited.connect(self._on_input_text_edited)
         self.mic_btn.clicked.connect(self.toggle_listening)
         self.guidance_btn.clicked.connect(self._on_guidance_btn_clicked)
         self.mode_combo.currentIndexChanged.connect(self.update_mode_tooltip)
@@ -49,6 +60,7 @@ class ChatWidget(QWidget):
         self.vision_combo.currentIndexChanged.connect(self.update_vision_tooltip)
         self.vision_combo.currentIndexChanged.connect(self._emit_vision_changed)
         self.agent_view_btn.clicked.connect(self._toggle_agent_view)
+        self.live_btn.clicked.connect(self._emit_live_mode_changed)
 
         self.view_mode = "bar_only"
         self._agent_view_enabled = False
@@ -65,6 +77,17 @@ class ChatWidget(QWidget):
         self._guidance_active: bool = False
         self._guidance_input_active: bool = False
         self._guidance_input_payload: dict | None = None
+        self._live_available = False
+        self._live_enabled = False
+        self._live_voice_active = False
+        self._live_session_state = "disconnected"
+        self._live_stream_ids: dict[str, str] = {}
+        self._thinking_status_text = ""
+        self._reply_status_text = ""
+        self._user_audio_level = 0.0
+        self._assistant_audio_level = 0.0
+        self._assistant_streaming_active = False
+        self._mic_visual_state = "idle"
 
         self.set_view_mode("bar_only")
         self.update_mode_tooltip()
@@ -72,6 +95,9 @@ class ChatWidget(QWidget):
 
         self.set_vision_mode("ROBO" if Config.USE_ROBOTICS_EYE else "OCR")
         self.set_workspace_status(Config.DEFAULT_WORKSPACE)
+        self.set_live_availability(Config.LIVE_MODE_AVAILABLE, "")
+        self.set_live_enabled(False)
+        self.set_live_session_state("disconnected")
 
     def set_operation_mode(self, mode: OperationMode):
         """Update dropdown without re-triggering mode change logic."""
@@ -114,6 +140,90 @@ class ChatWidget(QWidget):
         finally:
             self.vision_combo.blockSignals(False)
         self.update_vision_tooltip()
+
+    def set_live_availability(self, available: bool, reason: str = ""):
+        self._live_available = bool(available)
+        self.live_btn.setEnabled(self._live_available)
+        if self._live_available:
+            self.live_btn.setToolTip("Enable Gemini Live mode")
+        else:
+            self.live_btn.setChecked(False)
+            self._live_enabled = False
+            self._live_voice_active = False
+            self._live_session_state = "disconnected"
+            self._assistant_audio_level = 0.0
+            self._assistant_streaming_active = False
+            self.live_state_badge.setText("DISCONNECTED")
+            self.live_state_badge.setProperty("state", "disconnected")
+            self.live_state_badge.style().unpolish(self.live_state_badge)
+            self.live_state_badge.style().polish(self.live_state_badge)
+            self.live_btn.setToolTip(reason or "Gemini Live mode unavailable")
+        self._refresh_live_controls()
+        self._refresh_mic_visual_state()
+        self._apply_view_mode()
+
+    def set_live_enabled(self, enabled: bool):
+        target = bool(enabled and self._live_available)
+        self._live_enabled = target
+        if target and self.audio_service.is_listening:
+            self.audio_service.stop_listening()
+        if not target:
+            self._live_voice_active = False
+            self._user_audio_level = 0.0
+            self._assistant_audio_level = 0.0
+            self._assistant_streaming_active = False
+        try:
+            self.live_btn.blockSignals(True)
+            self.live_btn.setChecked(target)
+        finally:
+            self.live_btn.blockSignals(False)
+        self._refresh_live_controls()
+        self._refresh_mic_visual_state()
+        self._apply_view_mode()
+
+    def set_live_session_state(self, state: str):
+        state_key = (state or "disconnected").strip().lower() or "disconnected"
+        self._live_session_state = state_key
+        self.live_state_badge.setText(state_key.upper())
+        self.live_state_badge.setProperty("state", state_key)
+        self.live_state_badge.style().unpolish(self.live_state_badge)
+        self.live_state_badge.style().polish(self.live_state_badge)
+        self._update_live_state_status(state_key)
+        self._refresh_live_controls()
+        self._apply_view_mode()
+
+    def set_live_voice_active(self, active: bool):
+        self._live_voice_active = bool(active and self._live_enabled)
+        if not self._live_voice_active:
+            self._user_audio_level = 0.0
+        self._refresh_live_controls()
+        self._refresh_mic_visual_state()
+        self._apply_view_mode()
+
+    def _refresh_live_controls(self):
+        if self._live_enabled and self._live_available:
+            self.live_btn.setText("LIVE ON")
+            self.live_btn.setToolTip("Disable Gemini Live mode")
+        else:
+            self.live_btn.setText("LIVE")
+        if self._live_enabled and self._live_voice_active:
+            self.mic_btn.setToolTip("Stop live voice session")
+        elif self._live_enabled:
+            self.mic_btn.setToolTip("Start live voice session")
+        elif not self.audio_service.is_listening:
+            self.mic_btn.setToolTip("Start listening")
+        else:
+            self.mic_btn.setToolTip("Stop listening")
+        self._refresh_input_placeholder()
+
+    def _emit_live_mode_changed(self):
+        enabled = bool(self.live_btn.isChecked())
+        if not enabled and self._live_voice_active:
+            self.live_voice_toggled.emit(False)
+            self._live_voice_active = False
+        self._live_enabled = enabled and self._live_available
+        self.live_mode_changed.emit(self._live_enabled)
+        self._refresh_live_controls()
 
     def set_workspace_status(self, workspace: str):
         key = (workspace or "").strip().lower()
@@ -199,6 +309,15 @@ class ChatWidget(QWidget):
         self.workspace_badge.setObjectName("workspaceBadge")
         self.workspace_badge.setToolTip("Current workspace")
 
+        self.live_btn = QPushButton("LIVE")
+        self.live_btn.setObjectName("liveToggleBtn")
+        self.live_btn.setCheckable(True)
+        self.live_btn.setToolTip("Enable Gemini Live mode")
+
+        self.live_state_badge = QLabel("DISCONNECTED")
+        self.live_state_badge.setObjectName("liveStateBadge")
+        self.live_state_badge.setToolTip("Gemini Live session state")
+
         self.logout_btn = QPushButton("Sign Out")
         self.logout_btn.setObjectName("logoutLink")
         self.logout_btn.setCursor(Qt.PointingHandCursor)
@@ -207,6 +326,8 @@ class ChatWidget(QWidget):
         sr.addWidget(self.mode_combo)
         sr.addWidget(self.vision_combo)
         sr.addWidget(self.workspace_badge)
+        sr.addWidget(self.live_btn)
+        sr.addWidget(self.live_state_badge)
         sr.addStretch()
         sr.addWidget(self.logout_btn)
         ep.addWidget(self.settings_row)
@@ -230,17 +351,12 @@ class ChatWidget(QWidget):
         self.chat_display.setPlaceholderText("Ask anything to Pixie.")
         pp.addWidget(self.chat_display)
 
-        self.voice_visualizer = VoiceVisualizer()
-        self.voice_visualizer.setObjectName("voiceVisualizer")
-        self.voice_visualizer.setVisible(False)
-        pp.addWidget(self.voice_visualizer)
-
         self.compact_stop_btn = QPushButton("Stop")
         self.compact_stop_btn.setObjectName("compactStopBtn")
         self.compact_stop_btn.setFixedHeight(28)
         self.compact_stop_btn.setVisible(False)
         self.compact_stop_btn.setToolTip("Stop voice session")
-        self.compact_stop_btn.clicked.connect(self.audio_service.stop_listening)
+        self.compact_stop_btn.clicked.connect(self._stop_voice_session)
         pp.addWidget(self.compact_stop_btn)
 
         self.input_hint = QLabel("Open apps, send emails/WhatsApp, fix PC issues, or ask anything...")
@@ -317,9 +433,9 @@ class ChatWidget(QWidget):
 
         self.input_field = QLineEdit()
         self.input_field.setObjectName("inputField")
-        self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
+        self.input_field.setPlaceholderText(DEFAULT_INPUT_PROMPT)
 
-        self.mic_btn = QPushButton("Mic")
+        self.mic_btn = AnimatedMicButton()
         self.mic_btn.setObjectName("micBtn")
         self.mic_btn.setFixedSize(40, 30)
         self.mic_btn.setToolTip("Start listening")
@@ -393,14 +509,15 @@ class ChatWidget(QWidget):
                 color: #1f2937;
                 font: 15px 'Segoe UI', sans-serif;
             }
-            QPushButton#sendBtn, QPushButton#micBtn {
+            QPushButton#sendBtn {
                 background: #eef2f7;
                 border: 1px solid #d5dce7;
                 border-radius: 10px;
                 color: #334155;
                 font: 600 11px 'Segoe UI', sans-serif;
             }
-            QPushButton#sendBtn:hover, QPushButton#micBtn:hover { background: #e2e8f0; border-color: #bcc7d6; }
+            QPushButton#sendBtn:hover { background: #e2e8f0; border-color: #bcc7d6; }
+            AnimatedMicButton#micBtn { background: transparent; border: none; }
             QPushButton#expandBtn, QPushButton#agentViewBtn, QPushButton#minimizeBtn, QPushButton#closeBtn {
                 background: #ffffff;
                 border: 1px solid #d2dae5;
@@ -466,6 +583,53 @@ class ChatWidget(QWidget):
                 color: #166534;
                 border: 1px solid #bbf7d0;
             }
+            QPushButton#liveToggleBtn {
+                background: #ffffff;
+                border: 1px solid #d2dae5;
+                border-radius: 8px;
+                color: #334155;
+                font: 700 11px 'Segoe UI', sans-serif;
+                padding: 4px 10px;
+            }
+            QPushButton#liveToggleBtn:checked {
+                background: #ecfeff;
+                color: #0f766e;
+                border-color: #67e8f9;
+            }
+            QPushButton#liveToggleBtn:disabled {
+                color: #9ca3af;
+                background: #f4f6f8;
+                border-color: #e5e7eb;
+            }
+            QLabel#liveStateBadge {
+                background: #f8fafc;
+                color: #475569;
+                border: 1px solid #d5dce7;
+                border-radius: 8px;
+                padding: 2px 8px;
+                font: 700 10px 'Segoe UI', sans-serif;
+                qproperty-alignment: 'AlignCenter';
+            }
+            QLabel#liveStateBadge[state="connected"], QLabel#liveStateBadge[state="listening"] {
+                background: #ecfdf3;
+                color: #166534;
+                border-color: #bbf7d0;
+            }
+            QLabel#liveStateBadge[state="connecting"], QLabel#liveStateBadge[state="thinking"], QLabel#liveStateBadge[state="waiting"] {
+                background: #eff6ff;
+                color: #1d4ed8;
+                border-color: #bfdbfe;
+            }
+            QLabel#liveStateBadge[state="acting"], QLabel#liveStateBadge[state="interrupted"] {
+                background: #fff7ed;
+                color: #c2410c;
+                border-color: #fed7aa;
+            }
+            QLabel#liveStateBadge[state="disconnected"] {
+                background: #f8fafc;
+                color: #475569;
+                border-color: #d5dce7;
+            }
             QPushButton#logoutLink {
                 background: transparent;
                 border: none;
@@ -494,8 +658,8 @@ class ChatWidget(QWidget):
                 font: 14px 'Segoe UI', sans-serif;
                 padding: 10px;
             }
+            QLineEdit#inputField::placeholder { color: #64748b; }
             QLabel#inputHint { color: #64748b; font: 12px 'Segoe UI', sans-serif; padding: 2px 2px; }
-            QWidget#voiceVisualizer { background: #eef2f7; border: 1px solid #d5deea; border-radius: 10px; }
             QPushButton#compactStopBtn {
                 background: #fff7ed;
                 color: #9a3412;
@@ -534,9 +698,106 @@ class ChatWidget(QWidget):
             self._render_chat()
             return
 
-    def _start_turn(self):
+    def _guidance_placeholder_text(self) -> str:
+        if not self._guidance_input_active or not isinstance(self._guidance_input_payload, dict):
+            return ""
+        if self._guidance_input_payload.get("final"):
+            return GUIDANCE_FINAL_PROMPT
+        return GUIDANCE_INPUT_PROMPT
+
+    def _idle_placeholder_text(self) -> str:
+        if self._live_enabled and self._live_voice_active:
+            return LIVE_VOICE_INPUT_PROMPT
+        if self._live_enabled:
+            return LIVE_IDLE_INPUT_PROMPT
+        if self.audio_service.is_listening:
+            return LISTENING_INPUT_PROMPT
+        return DEFAULT_INPUT_PROMPT
+
+    def _refresh_input_placeholder(self) -> None:
+        placeholder = (
+            self._guidance_placeholder_text()
+            or self._reply_status_text
+            or self._thinking_status_text
+            or self._idle_placeholder_text()
+        )
+        self.input_field.setPlaceholderText(placeholder)
+
+    def _clear_transient_status(self) -> None:
+        self._thinking_status_text = ""
+        self._reply_status_text = ""
+        self._refresh_input_placeholder()
+
+    def _set_thinking_status(self, text: str | None) -> None:
+        clean = " ".join(str(text or "").split())
+        self._thinking_status_text = clean
+        self._refresh_input_placeholder()
+
+    def _clear_thinking_status(self) -> None:
+        self._thinking_status_text = ""
+        self._refresh_input_placeholder()
+
+    def _set_reply_status(self, text: str | None) -> None:
+        clean = " ".join(str(text or "").split())
+        self._reply_status_text = clean
+        self._refresh_input_placeholder()
+
+    def _clear_reply_status(self) -> None:
+        self._reply_status_text = ""
+        self._refresh_input_placeholder()
+
+    def _assistant_visual_active(self) -> bool:
+        return self._assistant_streaming_active or self._assistant_audio_level > 0.02
+
+    def _refresh_mic_visual_state(self) -> None:
+        if not self.mic_btn.isEnabled():
+            state = "disabled"
+            level = 0.0
+        elif self._assistant_visual_active():
+            state = "speaking_assistant"
+            level = self._assistant_audio_level
+        elif self._live_enabled and self._live_voice_active:
+            state = "listening_user"
+            level = self._user_audio_level
+        elif self.audio_service.is_listening:
+            state = "listening_user"
+            level = self._user_audio_level
+        else:
+            state = "idle"
+            level = 0.0
+
+        self._mic_visual_state = state
+        self.mic_btn.set_visual_state(state)
+        self.mic_btn.set_level(level)
+
+    def _update_live_state_status(self, state_key: str) -> None:
+        state = (state_key or "").strip().lower()
+        status_map = {
+            "connecting": "Connecting to Gemini Live...",
+            "thinking": "Thinking...",
+            "waiting": "Waiting for the current action...",
+            "acting": "Working on the task...",
+            "interrupted": "Interrupted. Waiting for your next instruction...",
+        }
+        if self._reply_status_text:
+            return
+        if state in status_map:
+            self._set_thinking_status(status_map[state])
+            return
+        if state in {"listening", "disconnected"}:
+            self._clear_thinking_status()
+
+    def _on_input_text_edited(self, _text: str) -> None:
+        self._clear_transient_status()
+
+    def _start_turn(self, *, reset_status: bool = True):
         self._turn_active = True
         self._thinking_id = None
+        self._assistant_streaming_active = False
+        self._assistant_audio_level = 0.0
+        if reset_status:
+            self._clear_transient_status()
+        self._refresh_mic_visual_state()
 
     def _is_activity_line(self, text: str) -> bool:
         s = (text or "").strip()
@@ -877,6 +1138,7 @@ class ChatWidget(QWidget):
                     if append_line != last:
                         msg["lines"].append(append_line)
                         msg["_last_line"] = append_line
+                        self._set_thinking_status(append_line)
                         # Keep the thinking panel tight.
                         if len(msg["lines"]) > 40:
                             msg["lines"] = msg["lines"][-40:]
@@ -896,9 +1158,7 @@ class ChatWidget(QWidget):
             self._start_turn()
             self.add_user_message(text)
             self.input_field.clear()
-            # Reset placeholder if it was changed for guidance
-            if self._guidance_input_active or self._guidance_active:
-                self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
+            self._refresh_input_placeholder()
             # Check for new conversational guidance input first
             if self._send_guidance_input(text):
                 return
@@ -1090,21 +1350,36 @@ class ChatWidget(QWidget):
         else:
             self._append_message(kind="system", text=text)
 
+    def _stop_voice_session(self):
+        if self._live_enabled:
+            self.live_voice_toggled.emit(False)
+            self.set_live_voice_active(False)
+            return
+        self.audio_service.stop_listening()
+
     def toggle_listening(self):
+        if self._live_enabled:
+            target = not self._live_voice_active
+            self.live_voice_toggled.emit(target)
+            self.set_live_voice_active(target)
+            self._apply_view_mode()
+            return
+
         if self.audio_service.is_listening:
             self.audio_service.stop_listening()
         else:
             self.audio_service.start_listening()
 
     def on_listening_status(self, listening):
+        if self._live_enabled:
+            return
         if listening:
-            self.mic_btn.setText("Stop")
             self.mic_btn.setToolTip("Stop listening")
-            self.input_field.setPlaceholderText("Listening...")
         else:
-            self.mic_btn.setText("Mic")
             self.mic_btn.setToolTip("Start listening")
-            self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
+            self._user_audio_level = 0.0
+        self._refresh_input_placeholder()
+        self._refresh_mic_visual_state()
         self._apply_view_mode()
 
     def on_speech_text(self, text):
@@ -1131,6 +1406,7 @@ class ChatWidget(QWidget):
         payload = self._guidance_input_payload
         self._guidance_input_payload = None
         self._guidance_input_active = False
+        self._refresh_input_placeholder()
 
         payload["feedback"] = text
         event = payload.get("event")
@@ -1152,6 +1428,7 @@ class ChatWidget(QWidget):
         self._update_guidance_steps(None)
         self.guidance_bar.hide()
         self.guidance_btn.hide()
+        self._refresh_input_placeholder()
 
         payload["result"] = False
         payload["feedback"] = text
@@ -1163,10 +1440,51 @@ class ChatWidget(QWidget):
         return True
 
     def on_audio_level(self, level):
-        self.voice_visualizer.set_level(level)
+        self._user_audio_level = max(0.0, float(level or 0.0))
+        self._refresh_mic_visual_state()
+
+    def on_live_audio_level(self, level: float):
+        self._user_audio_level = max(0.0, float(level or 0.0))
+        self._refresh_mic_visual_state()
+
+    def on_assistant_audio_level(self, level: float):
+        self._assistant_audio_level = max(0.0, float(level or 0.0))
+        self._refresh_mic_visual_state()
 
     def send_to_agent(self, text):
         self.command_received.emit(text)
+
+    def on_live_transcript(self, speaker: str, text: str, final: bool):
+        clean = str(text or "").strip()
+        if not clean:
+            return
+        self._hide_input_hint()
+        kind = "user" if str(speaker or "").strip().lower() == "user" else "assistant"
+        if kind == "user" and not self._live_voice_active and self._merge_into_latest_typed_user(clean):
+            return
+        stream_key = "user" if kind == "user" else "assistant"
+        if stream_key not in self._live_stream_ids:
+            self._start_turn(reset_status=(kind == "user"))
+        if kind == "assistant":
+            self._assistant_streaming_active = not bool(final)
+            self._set_reply_status(clean)
+            self._refresh_mic_visual_state()
+        self._upsert_live_transcript(kind=kind, text=clean, final=bool(final))
+        if kind == "assistant" and final:
+            self._assistant_streaming_active = False
+            self._refresh_mic_visual_state()
+
+    def on_live_action_state(self, payload: dict):
+        if not isinstance(payload, dict):
+            return
+        status = str(payload.get("status") or "").strip()
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return
+        if not self._reply_status_text:
+            self._set_thinking_status(message)
+        label = f"Live action {status}: {message}" if status else f"Live action: {message}"
+        self.add_activity_message(label)
 
     def add_system_message(self, message):
         text = "" if message is None else str(message)
@@ -1197,6 +1515,9 @@ class ChatWidget(QWidget):
         self._stream_target_id = msg_id
         self._stream_full_text = s
         self._stream_pos = 0
+        self._assistant_streaming_active = True
+        self._set_reply_status("Composing response...")
+        self._refresh_mic_visual_state()
 
         # Create placeholder assistant bubble
         self._chat_model.append({"kind": "assistant", "id": msg_id, "text": ""})
@@ -1213,6 +1534,8 @@ class ChatWidget(QWidget):
         if not self._stream_target_id:
             if self._stream_timer is not None:
                 self._stream_timer.stop()
+            self._assistant_streaming_active = False
+            self._refresh_mic_visual_state()
             return
 
         # Stream in chunks for performance
@@ -1220,11 +1543,14 @@ class ChatWidget(QWidget):
         if self._stream_pos >= len(self._stream_full_text):
             if self._stream_timer is not None:
                 self._stream_timer.stop()
+            self._assistant_streaming_active = False
+            self._refresh_mic_visual_state()
             return
 
         next_pos = min(len(self._stream_full_text), self._stream_pos + chunk_size)
         new_text = self._stream_full_text[:next_pos]
         self._stream_pos = next_pos
+        self._set_reply_status(new_text)
 
         for msg in self._chat_model:
             if msg.get("id") == self._stream_target_id:
@@ -1232,6 +1558,48 @@ class ChatWidget(QWidget):
                 break
 
         self._render_chat()
+
+        if self._stream_pos >= len(self._stream_full_text):
+            self._assistant_streaming_active = False
+            self._refresh_mic_visual_state()
+
+    def _upsert_live_transcript(self, *, kind: str, text: str, final: bool):
+        stream_key = "user" if kind == "user" else "assistant"
+        msg_id = self._live_stream_ids.get(stream_key)
+        if not msg_id:
+            msg_id = str(uuid4())
+            self._live_stream_ids[stream_key] = msg_id
+            self._chat_model.append({"kind": kind, "id": msg_id, "text": text})
+            self._render_chat()
+        else:
+            for msg in self._chat_model:
+                if msg.get("id") == msg_id:
+                    msg["text"] = text
+                    break
+            self._render_chat()
+
+        if final:
+            self._live_stream_ids.pop(stream_key, None)
+
+    def _merge_into_latest_typed_user(self, text: str) -> bool:
+        if not self._chat_model:
+            return False
+        last = self._chat_model[-1]
+        if (last.get("kind") or "").strip().lower() != "user":
+            return False
+
+        existing = str(last.get("text") or "").strip()
+        incoming = str(text or "").strip()
+        if not existing or not incoming:
+            return False
+
+        if incoming == existing or incoming.startswith(existing):
+            last["text"] = incoming
+            self._render_chat()
+            return True
+        if existing.startswith(incoming):
+            return True
+        return False
 
     def add_output_message(self, message):
         text = "" if message is None else str(message)
@@ -1272,10 +1640,16 @@ class ChatWidget(QWidget):
         self.view_mode = mode_key
         if self.view_mode == "bar_only" and self.audio_service.is_listening:
             self.audio_service.stop_listening()
+        if self.view_mode == "bar_only" and self._live_enabled and self._live_voice_active:
+            self.live_voice_toggled.emit(False)
+            self._live_voice_active = False
+            self._user_audio_level = 0.0
+            self._refresh_live_controls()
+            self._refresh_mic_visual_state()
         self._apply_view_mode()
 
     def _apply_view_mode(self):
-        listening = self.audio_service.is_listening
+        listening = self._live_voice_active if self._live_enabled else self.audio_service.is_listening
         expanded = self.view_mode == "extended"
 
         self.extended_panel.setVisible(expanded)
@@ -1290,8 +1664,6 @@ class ChatWidget(QWidget):
             self.agent_view_btn.setText("Agent View")
 
         if not expanded:
-            self.voice_visualizer.hide()
-            self.voice_visualizer.set_active(False)
             self.compact_stop_btn.hide()
             self.guidance_bar.hide()
             self.guidance_btn.hide()
@@ -1299,10 +1671,8 @@ class ChatWidget(QWidget):
             return
 
         if listening:
-            self.chat_display.hide()
+            self.chat_display.show()
             self.input_hint.hide()
-            self.voice_visualizer.show()
-            self.voice_visualizer.set_active(True)
             self.compact_stop_btn.show()
             self.guidance_bar.hide()
             self.guidance_btn.hide()
@@ -1314,8 +1684,6 @@ class ChatWidget(QWidget):
             self.input_hint.hide()
         else:
             self.input_hint.show()
-        self.voice_visualizer.hide()
-        self.voice_visualizer.set_active(False)
         self.compact_stop_btn.hide()
 
         if self._guidance_active or self._guidance_input_active:
@@ -1356,6 +1724,7 @@ class ChatWidget(QWidget):
         self.guidance_bar.hide()
         self.guidance_btn.hide()
         self.continue_btn.hide()
+        self._refresh_input_placeholder()
         self._apply_view_mode()
 
     def show_guidance_input(self, payload: dict):
@@ -1367,10 +1736,6 @@ class ChatWidget(QWidget):
         self._guidance_input_payload = payload
         self._guidance_input_active = True
         label = (payload.get("label") or "Next").strip() or "Next"
-        if payload.get("final"):
-            self.input_field.setPlaceholderText("Click Done to finish or type a reply...")
-        else:
-            self.input_field.setPlaceholderText("Type 'done', ask a question, or describe what happened...")
         self.guidance_btn.setText(label)
         self.guidance_btn.setEnabled(True)
         
@@ -1381,6 +1746,7 @@ class ChatWidget(QWidget):
             
         self.guidance_bar.show()
         self.guidance_btn.show()
+        self._refresh_input_placeholder()
         self._apply_view_mode()
 
     def _on_guidance_btn_clicked(self):
@@ -1393,7 +1759,7 @@ class ChatWidget(QWidget):
             self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.continue_btn.hide()
-            self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
+            self._refresh_input_placeholder()
             # Set "done" as the default input when clicking Next
             self._start_turn()
             self.add_activity_message("Planning next step...")
@@ -1425,7 +1791,7 @@ class ChatWidget(QWidget):
             self.guidance_bar.hide()
             self.guidance_btn.hide()
             self.continue_btn.hide()
-            self.input_field.setPlaceholderText("Ask Pixel Pilot to do anything...")
+            self._refresh_input_placeholder()
             
             self._start_turn()
             self.add_activity_message("Continuing task...")
