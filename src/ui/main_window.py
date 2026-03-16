@@ -1,9 +1,3 @@
-<<<<<<< HEAD
-import ctypes
-=======
->>>>>>> b029afe (refator: changed positions of agent view and details)
-from typing import Optional
-
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow
@@ -31,11 +25,6 @@ class MainWindow(QMainWindow):
         self.click_through_enabled = False
         self.expanded = False
         self._background_hidden = False
-        self.sidecar: Optional[SidecarPreview] = None
-<<<<<<< HEAD
-        self._last_external_foreground_handle: Optional[int] = None
-=======
->>>>>>> b029afe (refator: changed positions of agent view and details)
 
         self.chat_widget = ChatWidget()
         self.setCentralWidget(self.chat_widget)
@@ -49,101 +38,6 @@ class MainWindow(QMainWindow):
 
         self.center_at_top()
 
-    def ensure_sidecar(self):
-        if self.sidecar is not None:
-            return self.sidecar
-
-        self.sidecar = SidecarPreview(
-            self,
-            width=Config.SIDECAR_PREVIEW_WIDTH,
-            height=Config.SIDECAR_PREVIEW_HEIGHT,
-            fps=Config.SIDECAR_PREVIEW_FPS,
-        )
-        return self.sidecar
-
-    def _refresh_sidecar_visibility(self):
-        if not self.sidecar:
-            return
-
-        should_show = bool(
-            self.isVisible()
-            and not self._background_hidden
-            and self.chat_widget.can_toggle_agent_view()
-            and self.chat_widget.should_show_agent_view()
-        )
-        if should_show:
-            self.sidecar.show()
-            self.sidecar.reattach()
-        else:
-            self.sidecar.hide()
-
-<<<<<<< HEAD
-    @staticmethod
-    def _get_user32():
-        try:
-            return ctypes.windll.user32
-        except Exception:
-            return None
-
-    def _window_handle(self) -> int:
-        try:
-            return int(self.winId())
-        except Exception:
-            return 0
-
-    def _is_own_window_handle(self, handle: int) -> bool:
-        if handle <= 0:
-            return False
-        if handle == self._window_handle():
-            return True
-        if self.sidecar is not None:
-            try:
-                if handle == int(self.sidecar.winId()):
-                    return True
-            except Exception:
-                pass
-        return False
-
-    def _remember_external_foreground_window(self) -> None:
-        user32 = self._get_user32()
-        if user32 is None:
-            return
-
-        try:
-            handle = int(user32.GetForegroundWindow() or 0)
-        except Exception:
-            return
-
-        if handle <= 0 or self._is_own_window_handle(handle):
-            return
-        self._last_external_foreground_handle = handle
-
-    def _restore_last_external_foreground_window(self) -> None:
-        handle = int(self._last_external_foreground_handle or 0)
-        self._last_external_foreground_handle = None
-        if handle <= 0 or self._is_own_window_handle(handle):
-            return
-
-        user32 = self._get_user32()
-        if user32 is None:
-            return
-
-        try:
-            if not bool(user32.IsWindow(handle)):
-                return
-            try:
-                is_minimized = bool(user32.IsIconic(handle))
-            except Exception:
-                is_minimized = False
-            if is_minimized:
-                # SW_RESTORE only when minimized; do not unmaximize normal/maximized windows.
-                user32.ShowWindow(handle, 9)
-            user32.SetForegroundWindow(handle)
-        except Exception:
-            return
-
-=======
->>>>>>> b029afe (refator: changed positions of agent view and details)
     def set_click_through_enabled(self, enable: bool):
         enable = bool(enable)
         if not enable:

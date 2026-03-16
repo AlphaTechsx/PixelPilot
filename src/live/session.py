@@ -53,21 +53,6 @@ LIVE_SYSTEM_INSTRUCTION = (
     "Respect the current workspace, ask for confirmation before destructive actions, and keep replies concise."
 )
 
-LIVE_GUIDANCE_SYSTEM_INSTRUCTION = (
-    "You are Pixy operating in Gemini Live guidance mode on a Windows PC. "
-    "You are a tutor only: guide the user step-by-step with concise voice/text instructions. "
-    "For learning/help/explanation requests, visual guidance is required: draw overlays "
-    "(overlay_draw_box, overlay_draw_text, overlay_draw_pointer, overlay_clear) on the user's screen by default, "
-    "without waiting for the user to explicitly ask for highlighting. "
-    "Keep highlights tight and precise around the specific target element. "
-    "Use temporary overlays (ttl_ms) and clear stale annotations after each explained step. "
-    "Do not perform desktop actions on the user's behalf. "
-    "Do not wait for the user to say 'done' if you can already observe progress. "
-    "When you detect the user completed a step, acknowledge it immediately and continue to the next step. "
-    "If tools are available, use them only for read-only observation and adapt your guidance from what you see. "
-    "Ask short follow-up questions only when the observed state is ambiguous."
-)
-
 LIVE_SYSTEM_CONTEXT_PREFIX = (
     "Runtime continuity context. This is state, not a fresh user request. "
     "Use it only to preserve continuity across reconnects and turns."
@@ -129,46 +114,6 @@ class LiveSessionManager(QObject):
         )
         self.tools.set_guidance_mode(self._is_guidance_mode())
         self.availability_changed.emit(self.is_available, self.unavailable_reason)
-
-    def _mode_key(self, mode: Optional[object] = None) -> str:
-        value = self._mode if mode is None else mode
-        if isinstance(value, OperationMode):
-            return value.value
-        enum_value = getattr(value, "value", value)
-        return str(enum_value or "").strip().lower()
-
-    def _is_guidance_mode(self, mode: Optional[object] = None) -> bool:
-        return self._mode_key(mode) == OperationMode.GUIDE.value
-
-    @staticmethod
-    def _looks_like_explanation_request(text: str) -> bool:
-        haystack = str(text or "").strip().lower()
-        if not haystack:
-            return False
-        triggers = (
-            "explain",
-            "teach",
-            "help me understand",
-            "understand this",
-            "walk me through",
-            "how does this work",
-            "what is this",
-            "break this down",
-            "clarify",
-            "study",
-            "learn",
-        )
-        return any(term in haystack for term in triggers)
-
-    def _clear_overlay_immediately(self) -> None:
-        chat_window = getattr(self.agent, "chat_window", None)
-        sender = getattr(chat_window, "send_overlay_command", None)
-        if not callable(sender):
-            return
-        try:
-            sender({"action": "overlay_clear"})
-        except Exception:
-            logger.debug("Failed to clear overlay before explanation turn", exc_info=True)
 
     @property
     def is_available(self) -> bool:
@@ -245,27 +190,6 @@ class LiveSessionManager(QObject):
 
     def notify_workspace_changed(self, workspace: str) -> None:
         self._workspace = (workspace or "user").strip().lower() or "user"
-
-    def notify_mode_changed(self, mode: object) -> None:
-        was_guidance = self._is_guidance_mode()
-        self._mode = mode
-        is_guidance = self._is_guidance_mode()
-        self.tools.set_guidance_mode(is_guidance)
-        self._last_guidance_snapshot_signature = ""
-        self._last_guidance_probe_sent_at = 0.0
-
-        if is_guidance and not was_guidance:
-            self.broker.cancel_current_action("Live guidance mode enabled. Actions are disabled.")
-
-        policy_boundary_changed = is_guidance != was_guidance
-        if (
-            policy_boundary_changed
-            and self.enabled
-            and self._session is not None
-            and self._loop
-            and self._loop.is_running()
-        ):
-            self._submit_async(self._reconnect_with_resume(), ensure_loop=False)
 
     def shutdown(self) -> None:
         self._shutdown_event.set()
