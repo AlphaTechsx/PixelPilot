@@ -1,3 +1,5 @@
+from typing import Optional
+
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow
@@ -25,6 +27,7 @@ class MainWindow(QMainWindow):
         self.click_through_enabled = False
         self.expanded = False
         self._background_hidden = False
+        self.sidecar: Optional[SidecarPreview] = None
 
         self.chat_widget = ChatWidget()
         self.setCentralWidget(self.chat_widget)
@@ -37,6 +40,34 @@ class MainWindow(QMainWindow):
         self.chat_widget.agent_view_visibility_changed.connect(self._refresh_sidecar_visibility)
 
         self.center_at_top()
+
+    def ensure_sidecar(self):
+        if self.sidecar is not None:
+            return self.sidecar
+
+        self.sidecar = SidecarPreview(
+            self,
+            width=Config.SIDECAR_PREVIEW_WIDTH,
+            height=Config.SIDECAR_PREVIEW_HEIGHT,
+            fps=Config.SIDECAR_PREVIEW_FPS,
+        )
+        return self.sidecar
+
+    def _refresh_sidecar_visibility(self):
+        if not self.sidecar:
+            return
+
+        should_show = bool(
+            self.isVisible()
+            and not self._background_hidden
+            and self.chat_widget.can_toggle_agent_view()
+            and self.chat_widget.should_show_agent_view()
+        )
+        if should_show:
+            self.sidecar.show()
+            self.sidecar.reattach()
+        else:
+            self.sidecar.hide()
 
     def set_click_through_enabled(self, enable: bool):
         enable = bool(enable)

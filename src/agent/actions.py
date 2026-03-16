@@ -483,58 +483,7 @@ class ActionExecutor:
 
         self.log(f"Switching to workspace: {workspace}")
         self.agent._set_workspace(workspace, reason="Agent requested switch")
-        effective_workspace = str(
-            getattr(self.agent, "active_workspace", workspace) or workspace
-        ).strip().lower() or "user"
-        return self._result(
-            True,
-            f"Switched workspace to {effective_workspace}",
-            payload={
-                "workspace": effective_workspace,
-                "requested_workspace": str(workspace),
-            },
-        )
-
-    def _execute_list_windows(self, params: Dict) -> Dict[str, Any]:
-        result = ui_automation.list_windows(
-            self.agent.active_workspace,
-            self.desktop_manager,
-            title_contains=str(params.get("title_contains") or ""),
-            process_name=str(params.get("process_name") or ""),
-            visible_only=bool(params.get("visible_only", False)),
-            max_windows=int(params.get("max_windows") or Config.UIA_MAX_WINDOWS),
-        )
-        if result.get("status") == "ok":
-            return self._result(
-                True,
-                f"Listed {result.get('windows_count', 0)} window(s)",
-                payload=result,
-            )
-        return self._result(
-            False,
-            f"Failed to list windows: {result.get('reason', 'unknown')}",
-            payload=result,
-        )
-
-    def _execute_focus_window(self, params: Dict) -> Dict[str, Any]:
-        result = ui_automation.focus_window(
-            self.agent.active_workspace,
-            self.desktop_manager,
-            window_id=str(params.get("window_id") or "").strip() or None,
-            title_contains=str(params.get("title_contains") or ""),
-            process_name=str(params.get("process_name") or ""),
-            restore=bool(params.get("restore", True)),
-            maximize=bool(params.get("maximize", False)),
-        )
-        if result.get("success"):
-            window = result.get("window") or {}
-            title = str(window.get("title") or result.get("window_id") or "target")
-            return self._result(True, f"Focused window: {title}", payload=result)
-        return self._result(
-            False,
-            f"Failed to focus window: {result.get('reason', 'unknown')}",
-            payload=result,
-        )
+        return self._result(True, f"Switched workspace to {workspace}", payload={"workspace": workspace})
 
     def _execute_list_windows(self, params: Dict) -> Dict[str, Any]:
         result = ui_automation.list_windows(

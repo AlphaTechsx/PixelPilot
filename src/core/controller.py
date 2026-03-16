@@ -39,9 +39,6 @@ class MainController(QObject):
         self._stop_requested = False
         self.live_session = None
         self.live_mode_enabled = False
-        self._live_action_passthrough_active = False
-        self._task_passthrough_active = False
-        self.annotation_overlay = None
         
         self.desktop_manager = None
 
@@ -138,6 +135,71 @@ class MainController(QObject):
             pass
         self.handle_workspace_changed("user")
 
+    @staticmethod
+    def _normalize_workspace(workspace: str) -> str:
+        key = (workspace or "user").strip().lower() or "user"
+        if key not in {"user", "agent"}:
+            key = "user"
+        return key
+
+    def _resolve_current_workspace(self) -> str:
+        if not self.agent:
+            return "user"
+        return self._normalize_workspace(getattr(self.agent, "active_workspace", "user"))
+
+    def _resolve_current_mode(self) -> OperationMode:
+        mode = None
+        if self.agent:
+            mode = getattr(self.agent, "mode", None)
+        if mode is None:
+            mode = getattr(self.gui_adapter, "current_mode", None)
+        if isinstance(mode, OperationMode):
+            return mode
+        mode_value = getattr(mode, "value", mode)
+        return Config.get_mode(str(mode_value or Config.DEFAULT_MODE.value))
+
+    def _is_live_session_enabled(self) -> bool:
+        return bool(
+            self.live_mode_enabled
+            and self.live_session
+            and bool(getattr(self.live_session, "enabled", False))
+        )
+
+    def _apply_click_through_policy(self):
+        workspace = self._resolve_current_workspace()
+        mode = self._resolve_current_mode()
+        click_through = False
+
+        if workspace == "user":
+            if self._is_live_session_enabled():
+                click_through = bool(self._live_action_passthrough_active)
+            elif mode in {OperationMode.GUIDE, OperationMode.SAFE, OperationMode.AUTO}:
+                click_through = bool(self._task_passthrough_active)
+
+        try:
+            self.main_window.set_click_through_enabled(click_through)
+        except Exception:
+            pass
+
+    def _force_user_workspace_for_mode_change(self):
+        if not self.agent:
+            return
+
+        reason = "Mode change policy: switched to user workspace"
+        setter = getattr(self.agent, "_set_workspace", None)
+        if callable(setter):
+            try:
+                setter("user", reason=reason)
+                return
+            except Exception:
+                pass
+
+        try:
+            self.agent.active_workspace = "user"
+        except Exception:
+            pass
+        self.handle_workspace_changed("user")
+
     def init_agent(self):
         try:
             robotics_eye = None
@@ -171,8 +233,6 @@ class MainController(QObject):
                 self.agent.desktop_manager = self.desktop_manager
 
             self._init_live_session()
-            self._apply_default_live_mode()
-            self._apply_click_through_policy()
             self.update_sidecar_visibility()
             self._clear_annotation_overlay()
         except Exception as e:
@@ -493,10 +553,13 @@ class MainController(QObject):
         except Exception:
             pass
 
-        if workspace != "user":
-            self._live_action_passthrough_active = False
-            self._task_passthrough_active = False
-            self._clear_annotation_overlay()
+        try:
+            if workspace == "user":
+                self.main_window.set_click_through_enabled(True)
+            else:
+                self.main_window.set_click_through_enabled(False)
+        except Exception:
+            pass
 
         if self.live_session:
             try:
@@ -580,10 +643,6 @@ class MainController(QObject):
 
         success = self.live_session.set_enabled(bool(enabled))
         self.live_mode_enabled = bool(enabled and success)
-        self._task_passthrough_active = False
-        if not self.live_mode_enabled:
-            self._live_action_passthrough_active = False
-            self._clear_annotation_overlay()
         if self.live_mode_enabled and self.agent:
             try:
                 self.live_session.notify_workspace_changed(self.agent.active_workspace)
