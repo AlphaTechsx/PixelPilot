@@ -91,6 +91,23 @@ class MainWindow(QMainWindow):
         if enable:
             self._restore_last_external_foreground_window()
 
+    def _remember_external_foreground_window(self):
+        import ctypes
+        try:
+            hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if hwnd and hwnd != int(self.winId()):
+                self._last_external_hwnd = hwnd
+        except Exception:
+            pass
+
+    def _restore_last_external_foreground_window(self):
+        import ctypes
+        try:
+            if hasattr(self, '_last_external_hwnd') and self._last_external_hwnd:
+                ctypes.windll.user32.SetForegroundWindow(self._last_external_hwnd)
+        except Exception:
+            pass
+
     def center_at_top(self):
         screen = QGuiApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
         geo = screen.availableGeometry() if screen else QApplication.primaryScreen().availableGeometry()
@@ -123,9 +140,11 @@ class MainWindow(QMainWindow):
             self.chat_widget.set_expanded(expanded)
             return
 
-        self._resize_for_state(expanded=expanded)
         self.expanded = expanded
+        self._resize_for_state(expanded=expanded)
         self.chat_widget.set_expanded(expanded)
+        if self.sidecar and self.sidecar.isVisible():
+            self.sidecar.reattach()
 
     def toggle_expand(self):
         if self._background_hidden:

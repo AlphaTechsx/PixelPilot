@@ -52,7 +52,6 @@ class MainController(QObject):
         self.gui_adapter.guidance_next_requested.connect(self.handle_guidance_next)
         self.gui_adapter.guidance_input_requested.connect(self.handle_guidance_input)
         self.gui_adapter.workspace_changed.connect(self.handle_workspace_changed)
-        self.gui_adapter.overlay_command_requested.connect(self.handle_overlay_command)
 
     @staticmethod
     def _normalize_workspace(workspace: str) -> str:
@@ -109,6 +108,7 @@ class MainController(QObject):
         should_enable = bool(Config.LIVE_MODE_DEFAULT_ENABLED and available)
         if should_enable:
             self.handle_live_mode_changed(True)
+            self.handle_live_voice_toggled(True)
             return
 
         self.live_mode_enabled = False
@@ -286,6 +286,7 @@ class MainController(QObject):
                 pass
             self._handle_live_availability(available, reason)
             self._handle_live_session_state("disconnected")
+            self._apply_default_live_mode()
         except Exception as exc:
             logger.exception("Failed to initialize Gemini Live session")
             self.live_session = None

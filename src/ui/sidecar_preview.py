@@ -372,8 +372,14 @@ class SidecarPreview(QWidget):
             return
 
         parent_geo = self.parent_window.geometry()
-        new_x = parent_geo.left()
-        new_y = parent_geo.bottom() + 10
+        
+        is_expanded = getattr(self.parent_window, "expanded", False)
+        if is_expanded:
+            new_x = parent_geo.right() + 10
+            new_y = parent_geo.top()
+        else:
+            new_x = parent_geo.left()
+            new_y = parent_geo.bottom() + 10
 
         screen = (
             self.parent_window.screen()

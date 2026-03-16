@@ -383,6 +383,13 @@ def main():
             logger.warning(msg)
         else:
             logger.debug(msg)
+            
+    if hasattr(window, "chat_widget"):
+        cw = window.chat_widget
+        live_off = getattr(cw, "_live_enabled", False) and not getattr(cw, "_live_voice_active", False)
+        stt_off = not getattr(cw, "_live_enabled", False) and not getattr(cw.audio_service, "is_listening", False)
+        if live_off or stt_off:
+            cw.toggle_listening()
     
     window.show()
     if splash:

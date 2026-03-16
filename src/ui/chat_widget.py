@@ -1,4 +1,4 @@
-﻿import os
+import os
 import re
 from uuid import uuid4
 
@@ -340,6 +340,9 @@ class ChatWidget(QWidget):
         self._agent_view_enabled = bool(enabled)
         if not self._agent_view_enabled:
             self._agent_view_requested = False
+        else:
+            self._agent_view_requested = True
+            
         self._refresh_workspace_badge()
         self._apply_view_mode()
         if was_enabled != self._agent_view_enabled or was_requested != self._agent_view_requested:
