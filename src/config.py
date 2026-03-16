@@ -29,6 +29,7 @@ class Config:
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     USE_DIRECT_API = bool(GEMINI_API_KEY)
     ENABLE_GEMINI_LIVE_MODE = _env_bool("ENABLE_GEMINI_LIVE_MODE", True)
+    LIVE_MODE_DEFAULT_ENABLED = _env_bool("LIVE_MODE_DEFAULT_ENABLED", True)
     GEMINI_LIVE_MODEL = os.getenv(
         "GEMINI_LIVE_MODEL",
         "gemini-2.5-flash-native-audio-preview-12-2025",
