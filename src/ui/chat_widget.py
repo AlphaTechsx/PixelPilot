@@ -30,6 +30,9 @@ LIVE_IDLE_INPUT_PROMPT = "Type or speak to Gemini Live..."
 LIVE_VOICE_INPUT_PROMPT = "Live voice active..."
 GUIDANCE_FINAL_PROMPT = "Click Done to finish or type a reply..."
 GUIDANCE_INPUT_PROMPT = "Type 'done', ask a question, or describe what happened..."
+DETAILS_COLLAPSED_ICON = "\u25A2"
+DETAILS_EXPANDED_ICON = "\u2750"
+MINIMIZE_ICON = "\u2212"
 
 
 class ChatWidget(QWidget):
@@ -588,7 +591,7 @@ class ChatWidget(QWidget):
         i.addWidget(self.mic_btn)
         i.addWidget(self.send_btn)
 
-        self.expand_btn = QPushButton("Details")
+        self.expand_btn = QPushButton(DETAILS_COLLAPSED_ICON)
         self.expand_btn.setObjectName("expandBtn")
         self.expand_btn.setFixedHeight(32)
         self.expand_btn.setToolTip("Show process details")
@@ -598,7 +601,7 @@ class ChatWidget(QWidget):
         self.settings_btn.setFixedHeight(32)
         self.settings_btn.setToolTip("Mode, vision, and account settings")
 
-        self.minimize_btn = QPushButton("Min")
+        self.minimize_btn = QPushButton(MINIMIZE_ICON)
         self.minimize_btn.setObjectName("minimizeBtn")
         self.minimize_btn.setFixedHeight(32)
         self.minimize_btn.setToolTip("Hide to background")
@@ -612,8 +615,8 @@ class ChatWidget(QWidget):
         h.addWidget(self.workspace_badge)
         h.addWidget(self.live_btn)
         h.addWidget(self.settings_btn)
-        h.addWidget(self.expand_btn)
         h.addWidget(self.minimize_btn)
+        h.addWidget(self.expand_btn)
         h.addWidget(self.close_btn)
 
         self.agent_below_container = QFrame()
@@ -1799,7 +1802,8 @@ class ChatWidget(QWidget):
         expanded = self.view_mode == "extended"
 
         self.extended_panel.setVisible(expanded)
-        self.expand_btn.setText("Hide" if expanded else "Details")
+        self.expand_btn.setText(DETAILS_EXPANDED_ICON if expanded else DETAILS_COLLAPSED_ICON)
+        self.expand_btn.setToolTip("Hide process details" if expanded else "Show process details")
 
         show_agent = bool(expanded and self._agent_view_enabled and self._agent_view_requested)
         self.agent_below_container.setVisible(show_agent)
