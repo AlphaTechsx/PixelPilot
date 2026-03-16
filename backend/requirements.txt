@@ -9,3 +9,4 @@ bcrypt
 motor
 redis
 pydantic[email]
+websockets

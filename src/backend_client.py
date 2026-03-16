@@ -4,7 +4,9 @@ import os
 import base64
 import logging
 from typing import Any, Dict, Optional
-from urllib import request, error
+from urllib.parse import urlsplit, urlunsplit
+
+from websockets.sync.client import connect as ws_connect
 
 from config import Config
 
@@ -12,32 +14,29 @@ logger = logging.getLogger("pixelpilot.client")
 
 
 class RateLimitError(RuntimeError):
-    def __init__(self, message: str, remaining: Optional[int] = None, limit: Optional[int] = None):
+    def __init__(
+        self, message: str, remaining: Optional[int] = None, limit: Optional[int] = None
+    ):
         super().__init__(message)
         self.remaining = remaining
         self.limit = limit
 
 
-def _parse_error_detail(body: str) -> str:
-    if not body:
-        return "Request failed"
-    try:
-        data = json.loads(body)
-        return data.get("detail", "Request failed")
-    except Exception:
-        return body.strip() or "Request failed"
-
-
 class DirectGeminiClient:
     def __init__(self, api_key: Optional[str] = None):
         from google import genai
+
         self._api_key = api_key or Config.GEMINI_API_KEY
         if not self._api_key:
             raise RuntimeError("GEMINI_API_KEY is not set")
         self._client = genai.Client(api_key=self._api_key)
 
     def generate_content(
-        self, *, model: str, contents: list[dict], config: Optional[Dict[str, Any]] = None
+        self,
+        *,
+        model: str,
+        contents: list[dict],
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         from google.genai import types
 
@@ -65,7 +64,9 @@ class DirectGeminiClient:
                 if "google_search" in t:
                     real_tools.append(types.Tool(google_search=types.GoogleSearch()))
                 if "code_execution" in t:
-                    real_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
+                    real_tools.append(
+                        types.Tool(code_execution=types.ToolCodeExecution())
+                    )
 
         if "response_json_schema" in config_data:
             schema = config_data.pop("response_json_schema")
@@ -112,7 +113,11 @@ class DirectGeminiClient:
                 new_schema[key] = DirectGeminiClient._sanitize_schema(value)
             elif isinstance(value, list):
                 new_schema[key] = [
-                    DirectGeminiClient._sanitize_schema(item) if isinstance(item, dict) else item
+                    (
+                        DirectGeminiClient._sanitize_schema(item)
+                        if isinstance(item, dict)
+                        else item
+                    )
                     for item in value
                 ]
         return new_schema
@@ -121,51 +126,93 @@ class DirectGeminiClient:
 class BackendClient:
     def __init__(self, base_url: Optional[str] = None):
         from auth_manager import get_auth_manager
+
         self._get_auth = get_auth_manager
         self.base_url = (base_url or Config.BACKEND_URL).rstrip("/")
 
+    def _ws_url(self) -> str:
+        parts = urlsplit(self.base_url)
+        if not parts.scheme or not parts.netloc:
+            raise RuntimeError(f"Invalid BACKEND_URL: {self.base_url}")
+
+        scheme = "wss" if parts.scheme == "https" else "ws"
+        base_path = parts.path.rstrip("/")
+        ws_path = f"{base_path}/ws/generate" if base_path else "/ws/generate"
+        return urlunsplit((scheme, parts.netloc, ws_path, "", ""))
+
     def generate_content(
-        self, *, model: str, contents: list[dict], config: Optional[Dict[str, Any]] = None
+        self,
+        *,
+        model: str,
+        contents: list[dict],
+        config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         auth = self._get_auth()
         if not auth.access_token:
             raise RuntimeError("Not signed in. Please log in to continue.")
 
-        payload = {"model": model, "contents": contents, "config": config}
-        data = json.dumps(payload).encode("utf-8")
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {auth.access_token}",
-        }
-        url = f"{self.base_url}/v1/generate"
-        req = request.Request(url, data=data, method="POST", headers=headers)
-
+        ws_url = self._ws_url()
         try:
-            with request.urlopen(req, timeout=30) as resp:
-                raw = resp.read().decode("utf-8")
-                return json.loads(raw) if raw else {}
-        except error.HTTPError as e:
-            body = ""
-            try:
-                body = e.read().decode("utf-8")
-            except Exception:
-                pass
+            with ws_connect(
+                ws_url, open_timeout=10, close_timeout=5, max_size=20_000_000
+            ) as ws:
+                ws.send(json.dumps({"type": "auth", "token": auth.access_token}))
+                auth_resp = json.loads(ws.recv())
+                if auth_resp.get("type") == "error":
+                    code = int(auth_resp.get("code", 500))
+                    detail = auth_resp.get("detail", "Authentication failed")
+                    if code == 401:
+                        auth.logout()
+                        raise RuntimeError("Session expired. Please log in again.")
+                    raise RuntimeError(str(detail))
+                if auth_resp.get("type") != "auth_ok":
+                    raise RuntimeError("Backend authentication handshake failed")
 
-            detail = _parse_error_detail(body)
-            if e.code == 401:
-                auth.logout()
-                raise RuntimeError("Session expired. Please log in again.") from e
-            if e.code == 429:
-                limit = None
-                remaining = None
-                try:
-                    limit = int(e.headers.get("X-RateLimit-Limit", "0") or 0)
-                    remaining = int(e.headers.get("X-RateLimit-Remaining", "0") or 0)
-                except Exception:
-                    pass
-                raise RateLimitError(detail, remaining=remaining, limit=limit) from e
-            raise RuntimeError(detail) from e
-        except error.URLError as e:
+                ws.send(
+                    json.dumps(
+                        {
+                            "type": "generate",
+                            "request": {
+                                "model": model,
+                                "contents": contents,
+                                "config": config,
+                            },
+                        }
+                    )
+                )
+                response = json.loads(ws.recv())
+
+                if response.get("type") == "error":
+                    code = int(response.get("code", 500))
+                    detail_payload = response.get("detail", "Request failed")
+                    if isinstance(detail_payload, dict):
+                        detail = str(detail_payload.get("message") or "Request failed")
+                        limit = detail_payload.get("limit")
+                        remaining = detail_payload.get("remaining")
+                    else:
+                        detail = str(detail_payload)
+                        limit = None
+                        remaining = None
+
+                    if code == 401:
+                        auth.logout()
+                        raise RuntimeError("Session expired. Please log in again.")
+                    if code == 429:
+                        raise RateLimitError(detail, remaining=remaining, limit=limit)
+                    raise RuntimeError(detail)
+
+                if response.get("type") != "generate_result":
+                    raise RuntimeError("Unexpected backend response type")
+
+                result = response.get("data") or {}
+                if not isinstance(result, dict):
+                    return {"text": str(result)}
+                return result
+        except RateLimitError:
+            raise
+        except RuntimeError:
+            raise
+        except Exception as e:
             raise RuntimeError("Backend unavailable. Is it running?") from e
 
 
