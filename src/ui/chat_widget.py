@@ -20,6 +20,8 @@ from PySide6.QtSvgWidgets import QSvgWidget
 
 from services.audio import AudioService
 from .animated_mic_button import AnimatedMicButton
+from .animated_live_button import AnimatedLiveButton
+from .workspace_badge_button import WorkspaceBadgeButton
 from .sidecar_preview import EmbeddedAgentPreview
 from config import OperationMode, Config
 
@@ -33,6 +35,7 @@ GUIDANCE_INPUT_PROMPT = "Type 'done', ask a question, or describe what happened.
 DETAILS_COLLAPSED_ICON = "\u25A2"
 DETAILS_EXPANDED_ICON = "\u2750"
 MINIMIZE_ICON = "\u2212"
+SETTINGS_ICON = "\u2699"
 
 
 class ChatWidget(QWidget):
@@ -211,32 +214,32 @@ class ChatWidget(QWidget):
         self._refresh_mic_visual_state()
         self._apply_view_mode()
 
-    def _live_button_presentation(self) -> tuple[str, str, str]:
+    def _live_button_presentation(self) -> tuple[str, str]:
         if not self._live_available:
-            return ("LIVE N/A", "disabled", self.live_btn.toolTip() or "Gemini Live unavailable")
+            return ("disabled", self.live_btn.toolTip() or "Gemini Live unavailable")
         if not self._live_enabled:
-            return ("LIVE OFF", "off", "Enable Gemini Live mode")
+            return ("off", "Enable Gemini Live mode")
 
         state_key = (self._live_session_state or "disconnected").strip().lower()
         if state_key == "disconnected":
-            return ("READY", "ready", "Gemini Live is enabled and ready")
+            return ("ready", "Gemini Live is enabled and ready")
         if state_key == "connecting":
-            return ("CONNECT", "connecting", "Gemini Live is connecting")
+            return ("connecting", "Gemini Live is connecting")
         if state_key == "listening":
-            return ("LIVE ON", "connected", "Disable Gemini Live mode")
+            return ("connected", "Disable Gemini Live mode")
         if state_key == "thinking":
-            return ("THINK", "thinking", "Gemini Live is thinking")
+            return ("thinking", "Gemini Live is thinking")
         if state_key == "waiting":
-            return ("WAIT", "waiting", "Gemini Live is waiting for an action")
+            return ("waiting", "Gemini Live is waiting for an action")
         if state_key == "acting":
-            return ("ACTING", "acting", "Gemini Live is acting")
+            return ("acting", "Gemini Live is acting")
         if state_key == "interrupted":
-            return ("PAUSED", "interrupted", "Gemini Live was interrupted")
-        return ("LIVE ON", "connected", "Disable Gemini Live mode")
+            return ("interrupted", "Gemini Live was interrupted")
+        return ("connected", "Disable Gemini Live mode")
 
     def _apply_live_button_state(self):
-        text, state, tooltip = self._live_button_presentation()
-        self.live_btn.setText(text)
+        state, tooltip = self._live_button_presentation()
+        self.live_btn.set_visual_state(state)
         self.live_btn.setProperty("state", state)
         self.live_btn.setToolTip(tooltip)
         self.live_btn.style().unpolish(self.live_btn)
@@ -269,9 +272,7 @@ class ChatWidget(QWidget):
         if key not in {"user", "agent"}:
             key = "user"
 
-        label = "USER" if key == "user" else "AGENT"
-        self.workspace_badge.setText(label)
-        self.workspace_badge.setProperty("workspace", key)
+        self.workspace_badge.set_workspace(key)
         self.set_agent_view_enabled(key == "agent")
 
     def set_expanded(self, expanded: bool):
@@ -300,16 +301,15 @@ class ChatWidget(QWidget):
         return self._agent_view_enabled
 
     def _refresh_workspace_badge(self, show_agent: bool = False):
-        workspace = str(self.workspace_badge.property("workspace") or "user").strip().lower()
+        workspace = self.workspace_badge.workspace()
         is_agent = workspace == "agent"
         is_clickable = bool(is_agent and self._agent_view_enabled)
         is_active = bool(is_clickable and show_agent)
 
+        self.workspace_badge.set_clickable(is_clickable)
+        self.workspace_badge.set_agent_view_shown(is_active)
         self.workspace_badge.setProperty("clickable", is_clickable)
         self.workspace_badge.setProperty("agentView", "shown" if is_active else "hidden")
-        self.workspace_badge.setCursor(
-            Qt.CursorShape.PointingHandCursor if is_clickable else Qt.CursorShape.ArrowCursor
-        )
 
         if workspace == "agent":
             if is_clickable:
@@ -323,9 +323,6 @@ class ChatWidget(QWidget):
         else:
             tooltip = "Current workspace: User Desktop"
         self.workspace_badge.setToolTip(tooltip)
-
-        self.workspace_badge.style().unpolish(self.workspace_badge)
-        self.workspace_badge.style().polish(self.workspace_badge)
 
     def _emit_vision_changed(self):
         text = self.vision_combo.currentText().strip().upper()
@@ -452,18 +449,17 @@ class ChatWidget(QWidget):
         self.vision_combo.setItemData(0, "Robotics vision (Gemini Robotics-ER).", Qt.ItemDataRole.ToolTipRole)
         self.vision_combo.setItemData(1, "Local OCR + CV (EasyOCR + OpenCV).", Qt.ItemDataRole.ToolTipRole)
 
-        self.workspace_badge = QPushButton("USER")
+        self.workspace_badge = WorkspaceBadgeButton()
         self.workspace_badge.setObjectName("workspaceBadge")
         self.workspace_badge.setToolTip("Current workspace")
         self.workspace_badge.setCursor(Qt.CursorShape.ArrowCursor)
-        self.workspace_badge.setFixedHeight(22)
+        self.workspace_badge.setFixedSize(40, 32)
 
-        self.live_btn = QPushButton("LIVE")
+        self.live_btn = AnimatedLiveButton()
         self.live_btn.setObjectName("liveToggleBtn")
         self.live_btn.setCheckable(True)
         self.live_btn.setToolTip("Enable Gemini Live mode")
-        self.live_btn.setFixedHeight(32)
-        self.live_btn.setMinimumWidth(88)
+        self.live_btn.setFixedSize(42, 32)
 
         self.live_state_badge = QLabel("DISCONNECTED")
         self.live_state_badge.setObjectName("liveStateBadge")
@@ -596,9 +592,9 @@ class ChatWidget(QWidget):
         self.expand_btn.setFixedHeight(32)
         self.expand_btn.setToolTip("Show process details")
 
-        self.settings_btn = QPushButton("Settings")
+        self.settings_btn = QPushButton(SETTINGS_ICON)
         self.settings_btn.setObjectName("settingsBtn")
-        self.settings_btn.setFixedHeight(32)
+        self.settings_btn.setFixedSize(40, 32)
         self.settings_btn.setToolTip("Mode, vision, and account settings")
 
         self.minimize_btn = QPushButton(MINIMIZE_ICON)
@@ -674,6 +670,10 @@ class ChatWidget(QWidget):
                 background: #f1f5f9;
                 border-color: #bfcbdc;
             }
+            QPushButton#settingsBtn {
+                font: 700 16px 'Segoe UI Symbol', 'Segoe UI', sans-serif;
+                padding: 0;
+            }
             QPushButton#closeBtn:hover {
                 background: #fee2e2;
                 color: #7f1d1d;
@@ -696,73 +696,8 @@ class ChatWidget(QWidget):
             QComboBox#visionCombo { min-width: 64px; }
             QComboBox#modeCombo::drop-down, QComboBox#visionCombo::drop-down { border: none; width: 14px; }
             QComboBox#modeCombo::down-arrow, QComboBox#visionCombo::down-arrow { image: none; }
-            QPushButton#workspaceBadge {
-                background: #f3f4f6;
-                color: #334155;
-                border: 1px solid #d5dce7;
-                border-radius: 7px;
-                padding: 1px 6px;
-                min-width: 42px;
-                font: 700 9px 'Segoe UI', sans-serif;
-            }
-            QPushButton#workspaceBadge:hover[clickable="true"] {
-                border-color: #86efac;
-            }
-            QPushButton#workspaceBadge:pressed[clickable="true"] {
-                background: #dcfce7;
-            }
-            QPushButton#workspaceBadge[workspace="user"] {
-                background: #fff7ed;
-                color: #9a3412;
-                border: 1px solid #fed7aa;
-            }
-            QPushButton#workspaceBadge[workspace="agent"] {
-                background: #ecfdf3;
-                color: #166534;
-                border: 1px solid #bbf7d0;
-            }
-            QPushButton#workspaceBadge[agentView="shown"] {
-                background: #dcfce7;
-                border-color: #4ade80;
-            }
-            QPushButton#liveToggleBtn {
-                background: #ffffff;
-                border: 1px solid #d2dae5;
-                border-radius: 10px;
-                color: #334155;
-                font: 700 11px 'Segoe UI', sans-serif;
-                padding: 0 12px;
-            }
-            QPushButton#liveToggleBtn[state="off"] {
-                background: #ffffff;
-                color: #475569;
-                border-color: #d2dae5;
-            }
-            QPushButton#liveToggleBtn[state="ready"] {
-                background: #ecfeff;
-                color: #0f766e;
-                border-color: #67e8f9;
-            }
-            QPushButton#liveToggleBtn[state="connected"] {
-                background: #ecfdf3;
-                color: #166534;
-                border-color: #86efac;
-            }
-            QPushButton#liveToggleBtn[state="connecting"], QPushButton#liveToggleBtn[state="thinking"], QPushButton#liveToggleBtn[state="waiting"] {
-                background: #eff6ff;
-                color: #1d4ed8;
-                border-color: #93c5fd;
-            }
-            QPushButton#liveToggleBtn[state="acting"], QPushButton#liveToggleBtn[state="interrupted"] {
-                background: #fff7ed;
-                color: #c2410c;
-                border-color: #fdba74;
-            }
-            QPushButton#liveToggleBtn:disabled {
-                color: #9ca3af;
-                background: #f4f6f8;
-                border-color: #e5e7eb;
-            }
+            WorkspaceBadgeButton#workspaceBadge { background: transparent; border: none; }
+            AnimatedLiveButton#liveToggleBtn { background: transparent; border: none; }
             QLabel#liveStateBadge {
                 background: #f8fafc;
                 color: #475569;
