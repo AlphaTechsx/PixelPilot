@@ -97,6 +97,11 @@ class Config:
         192,
         minimum=16,
     )
+    LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS = _env_int(
+        "LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS",
+        LIVE_AUDIO_SPEAKER_QUEUE_MAX_CHUNKS,
+        minimum=16,
+    )
     LIVE_AUDIO_SPEAKER_QUEUE_TRIM_TO_CHUNKS = max(
         4,
         min(
@@ -138,8 +143,9 @@ class Config:
     )
     LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_CHUNKS = _env_int(
         "LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_CHUNKS",
-        512,
+        max(1, min(LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS, 144)),
         minimum=1,
+        maximum=LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS,
     )
     LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_COOLDOWN_SECONDS = _env_float(
         "LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_COOLDOWN_SECONDS",

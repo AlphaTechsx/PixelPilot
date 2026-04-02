@@ -126,6 +126,7 @@ LIVE_VIDEO_FPS=1
 LIVE_AUDIO_INPUT_RATE=16000
 LIVE_AUDIO_OUTPUT_RATE=24000
 LIVE_AUDIO_SPEAKER_QUEUE_MAX_CHUNKS=192
+LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS=192
 LIVE_AUDIO_SPEAKER_QUEUE_TRIM_TO_CHUNKS=144
 LIVE_AUDIO_SPEAKER_BATCH_MAX_CHUNKS=8
 LIVE_AUDIO_SPEAKER_BATCH_MAX_BYTES=65536
@@ -150,7 +151,8 @@ Notes:
 - `LIVE_MODE_DEFAULT_ENABLED=true` means AI power starts enabled whenever Live is available.
 - `LIVE_MODE_DEFAULT_VOICE_ENABLED=true` means the mic starts with AI power at startup.
 - `LIVE_ENABLE_IMAGE_INPUT=false` avoids image/video realtime sends for native-audio models (prevents policy-violation disconnects).
-- `LIVE_AUDIO_LOSSLESS_MODE=true` avoids dropping assistant audio chunks (smoothness over low latency).
+- `LIVE_AUDIO_LOSSLESS_MODE=true` keeps assistant audio lossless while using bounded backpressure instead of an unbounded queue.
+- `LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS` caps how far lossless playback can lag before the receive loop slows down to match the speaker.
 - If `GEMINI_API_KEY` is missing, app uses backend auth/proxy mode.
 
 ## Run

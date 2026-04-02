@@ -90,6 +90,7 @@ class LiveSessionManager(QObject):
         self._video_stream_enabled = bool(Config.LIVE_ENABLE_VIDEO_STREAM and self._image_input_enabled)
         self._speaker_drop_logged_at = 0.0
         self._speaker_backlog_logged_at = 0.0
+        self._speaker_backpressure_logged_at = 0.0
         self._audio_resample_logged_at = 0.0
         self._last_guidance_snapshot_signature = ""
         self._last_guidance_probe_sent_at = 0.0
@@ -502,7 +503,11 @@ class LiveSessionManager(QObject):
         config = self._build_connect_config()
         await transport.connect(model=Config.GEMINI_LIVE_MODEL, config=config)
         self._session_started_at = time.monotonic()
-        queue_maxsize = 0 if Config.LIVE_AUDIO_LOSSLESS_MODE else Config.LIVE_AUDIO_SPEAKER_QUEUE_MAX_CHUNKS
+        queue_maxsize = (
+            Config.LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS
+            if Config.LIVE_AUDIO_LOSSLESS_MODE
+            else Config.LIVE_AUDIO_SPEAKER_QUEUE_MAX_CHUNKS
+        )
         self._speaker_queue = asyncio.Queue(maxsize=queue_maxsize)
         self._receive_task = asyncio.create_task(self._receive_loop())
         self._video_task = (
@@ -648,6 +653,7 @@ class LiveSessionManager(QObject):
 
                     model_turn = server_content.get("model_turn")
                     has_output_transcription = bool(output_text)
+                    pending_audio_chunks: list[tuple[bytes, int]] = []
                     if isinstance(model_turn, dict):
                         for part in model_turn.get("parts") or []:
                             if not isinstance(part, dict):
@@ -674,10 +680,8 @@ class LiveSessionManager(QObject):
                             if data and self._speaker_queue is not None and (
                                 not mime_type or mime_type.startswith("audio/")
                             ):
-                                self._audio_output_suppressed_until = time.monotonic() + 0.25
-                                self.assistant_audio_level_changed.emit(self._compute_audio_level(data))
                                 sample_rate = self._extract_audio_rate(mime_type)
-                                await self._enqueue_speaker_audio(data, sample_rate)
+                                pending_audio_chunks.append((bytes(data), sample_rate))
 
                     if bool(server_content.get("interrupted")):
                         self.session_state_changed.emit("interrupted")
@@ -685,6 +689,7 @@ class LiveSessionManager(QObject):
                         self._drain_transcript_buffers(emit_final=True)
                         self.assistant_audio_level_changed.emit(0.0)
                         self._clear_speaker_queue()
+                        pending_audio_chunks.clear()
 
                     if bool(server_content.get("turn_complete")):
                         assistant_text = str(self._assistant_buffer or "").strip()
@@ -692,6 +697,13 @@ class LiveSessionManager(QObject):
                         self._finish_text_turn(assistant_text=assistant_text)
                         self.assistant_audio_level_changed.emit(0.0)
                         self.session_state_changed.emit("listening")
+
+                    for payload, sample_rate in pending_audio_chunks:
+                        self._audio_output_suppressed_until = time.monotonic() + 0.25
+                        self.assistant_audio_level_changed.emit(
+                            self._compute_audio_level(payload)
+                        )
+                        await self._enqueue_speaker_audio(payload, sample_rate)
 
                 if not received_messages:
                     break
@@ -1334,20 +1346,41 @@ class LiveSessionManager(QObject):
         item = (data, self._normalize_audio_rate(sample_rate, Config.LIVE_AUDIO_OUTPUT_RATE))
 
         if Config.LIVE_AUDIO_LOSSLESS_MODE:
+            if queue.maxsize > 0 and queue.full():
+                now = time.monotonic()
+                if (
+                    now - self._speaker_backpressure_logged_at
+                    > Config.LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_COOLDOWN_SECONDS
+                ):
+                    logger.warning(
+                        "Live speaker queue full in lossless mode (qsize=%d/%d); applying backpressure",
+                        queue.qsize(),
+                        queue.maxsize,
+                    )
+                    self._speaker_backpressure_logged_at = now
             await queue.put(item)
-            if queue.maxsize == 0:
-                backlog = queue.qsize()
-                if backlog >= Config.LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_CHUNKS:
-                    now = time.monotonic()
-                    if (
-                        now - self._speaker_backlog_logged_at
-                        > Config.LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_COOLDOWN_SECONDS
-                    ):
+            backlog = queue.qsize()
+            warning_threshold = Config.LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_CHUNKS
+            if queue.maxsize > 0:
+                warning_threshold = min(warning_threshold, queue.maxsize)
+            if backlog >= max(1, warning_threshold):
+                now = time.monotonic()
+                if (
+                    now - self._speaker_backlog_logged_at
+                    > Config.LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_COOLDOWN_SECONDS
+                ):
+                    if queue.maxsize > 0:
+                        logger.warning(
+                            "Live speaker backlog high in lossless mode (qsize=%d/%d)",
+                            backlog,
+                            queue.maxsize,
+                        )
+                    else:
                         logger.warning(
                             "Live speaker backlog high in lossless mode (qsize=%d)",
                             backlog,
                         )
-                        self._speaker_backlog_logged_at = now
+                    self._speaker_backlog_logged_at = now
             return
 
         if not queue.full():
