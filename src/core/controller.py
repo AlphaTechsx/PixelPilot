@@ -1,19 +1,19 @@
 import logging
 import threading
+import time
 
-from PySide6.QtCore import QCoreApplication, QObject, Slot
+from PySide6.QtCore import QCoreApplication, QObject, QTimer, Slot
 from PySide6.QtWidgets import QDialog
 
-from agent.core import AgentOrchestrator
 from config import Config, OperationMode
-from tools.eye import GeminiRoboticsEye
 from ui.custom_dialogs import ConfirmationDialog
 
 logger = logging.getLogger("pixelpilot.controller")
+startup_logger = logging.getLogger("pixelpilot.startup")
 
 
 class MainController(QObject):
-    def __init__(self, gui_adapter, main_window):
+    def __init__(self, gui_adapter, main_window, *, startup_started_at: float | None = None):
         super().__init__()
         self.gui_adapter = gui_adapter
         self.main_window = main_window
@@ -24,6 +24,15 @@ class MainController(QObject):
         self.desktop_manager = None
         self.gateway_server = None
         self.gateway_thread = None
+        self._bootstrap_started = False
+        self._startup_started_at = float(startup_started_at or time.perf_counter())
+        self._startup_logged_phases: set[str] = set()
+        self._app_index_watch_timer = QTimer(self)
+        self._app_index_watch_timer.setInterval(250)
+        self._app_index_watch_timer.timeout.connect(self._check_app_index_ready)
+
+        if getattr(self.gui_adapter, "current_mode", None) is None:
+            self.gui_adapter.current_mode = Config.DEFAULT_MODE
 
         self.gui_adapter.confirmation_requested.connect(self.handle_confirmation)
         self.gui_adapter.screenshot_prep_requested.connect(self.handle_screenshot_prep)
@@ -31,12 +40,54 @@ class MainController(QObject):
         self.gui_adapter.click_through_requested.connect(self.handle_click_through)
         self.gui_adapter.workspace_changed.connect(self.handle_workspace_changed)
 
+    def mark_startup_phase(self, phase: str, *, status: str = "ok", detail: str = "") -> None:
+        if phase in self._startup_logged_phases:
+            return
+
+        elapsed_ms = int((time.perf_counter() - self._startup_started_at) * 1000)
+        clean_detail = " ".join(str(detail or "").split())
+        if clean_detail:
+            startup_logger.info(
+                "STARTUP phase=%s status=%s elapsed_ms=%d detail=%s",
+                phase,
+                status,
+                elapsed_ms,
+                clean_detail,
+            )
+        else:
+            startup_logger.info(
+                "STARTUP phase=%s status=%s elapsed_ms=%d",
+                phase,
+                status,
+                elapsed_ms,
+            )
+        self._startup_logged_phases.add(phase)
+
+    def start_bootstrap(self) -> None:
+        if self._bootstrap_started:
+            return
+        self._bootstrap_started = True
+        QTimer.singleShot(0, self._bootstrap_agent_core)
+
+    def init_agent(self) -> None:
+        self.start_bootstrap()
+
     @staticmethod
     def _normalize_workspace(workspace: str) -> str:
         key = (workspace or "user").strip().lower() or "user"
         if key not in {"user", "agent"}:
             key = "user"
         return key
+
+    @staticmethod
+    def _apply_vision_flags(mode_key: str) -> None:
+        if mode_key == "robo":
+            Config.USE_ROBOTICS_EYE = True
+            Config.LAZY_VISION = False
+            return
+
+        Config.USE_ROBOTICS_EYE = False
+        Config.LAZY_VISION = True
 
     def _resolve_current_workspace(self) -> str:
         if not self.agent:
@@ -70,6 +121,17 @@ class MainController(QObject):
         except Exception:
             pass
 
+    def _startup_message(self, component: str, *, unavailable: bool = False) -> str:
+        if not self._bootstrap_started:
+            return f"{component} is unavailable."
+
+        phase = "agent_core_ready" if component == "AI" else "live_ready"
+        if phase not in self._startup_logged_phases:
+            return f"{component} is still starting up."
+        if unavailable:
+            return f"{component} is unavailable."
+        return f"{component} is unavailable."
+
     def _apply_default_live_mode(self) -> None:
         if not self.live_session:
             self.live_mode_enabled = False
@@ -81,12 +143,36 @@ class MainController(QObject):
         if should_enable and Config.LIVE_MODE_DEFAULT_VOICE_ENABLED:
             self.handle_live_voice_toggled(True)
 
-    def init_agent(self):
+    def _create_robotics_eye(self):
+        if not Config.USE_ROBOTICS_EYE:
+            return None
+
+        from tools.eye import GeminiRoboticsEye
+
+        return GeminiRoboticsEye()
+
+    def _sync_window_from_agent(self) -> None:
+        if not self.agent or not self.main_window or not hasattr(self.main_window, "chat_widget"):
+            return
+
+        try:
+            self.main_window.chat_widget.set_operation_mode(self.agent.mode)
+            self.main_window.chat_widget.set_vision_mode(
+                "ROBO" if self.agent.robotics_eye else "OCR"
+            )
+            self.main_window.chat_widget.set_workspace_status(self.agent.active_workspace)
+            self.main_window.chat_widget.set_agent_view_enabled(
+                self.agent.active_workspace == "agent"
+            )
+        except Exception:
+            pass
+
+    def _bootstrap_agent_core(self) -> None:
         try:
             robotics_eye = None
             if Config.USE_ROBOTICS_EYE:
                 try:
-                    robotics_eye = GeminiRoboticsEye()
+                    robotics_eye = self._create_robotics_eye()
                 except Exception as exc:
                     Config.USE_ROBOTICS_EYE = False
                     Config.LAZY_VISION = True
@@ -94,32 +180,98 @@ class MainController(QObject):
                         f"Robotics vision unavailable, falling back to OCR: {exc}"
                     )
 
+            from agent.core import AgentOrchestrator
+
             self.agent = AgentOrchestrator(
-                mode=Config.DEFAULT_MODE,
+                mode=self._resolve_current_mode(),
                 chat_window=self.gui_adapter,
                 robotics_eye=robotics_eye,
             )
             self.gui_adapter.current_mode = self.agent.mode
 
-            try:
-                if self.main_window and hasattr(self.main_window, "chat_widget"):
-                    self.main_window.chat_widget.set_workspace_status(
-                        self.agent.active_workspace
-                    )
-                    self.main_window.chat_widget.set_agent_view_enabled(
-                        self.agent.active_workspace == "agent"
-                    )
-            except Exception:
-                pass
-
             if self.desktop_manager:
                 self.agent.desktop_manager = self.desktop_manager
+                if hasattr(self.agent.keyboard, "set_desktop_manager"):
+                    self.agent.keyboard.set_desktop_manager(self.desktop_manager)
 
-            self._init_live_session()
+            self._sync_window_from_agent()
             self.update_sidecar_visibility()
+            self.mark_startup_phase(
+                "agent_core_ready",
+                detail=f"mode={self.agent.mode.value}",
+            )
         except Exception as exc:
-            logger.exception("Failed to initialize live runtime")
+            logger.exception("Failed to initialize agent core")
+            self.mark_startup_phase("agent_core_ready", status="error", detail=str(exc))
             self.gui_adapter.add_error_message(f"Failed to initialize agent: {exc}")
+            return
+
+        QTimer.singleShot(0, self._bootstrap_live_runtime)
+
+    def _bootstrap_live_runtime(self) -> None:
+        if not self.agent:
+            self.mark_startup_phase("live_ready", status="error", detail="agent_unavailable")
+            return
+
+        self._init_live_session()
+
+        if not self.live_session:
+            self.mark_startup_phase("live_ready", status="error", detail="session_unavailable")
+        else:
+            available = bool(getattr(self.live_session, "is_available", False))
+            reason = str(getattr(self.live_session, "unavailable_reason", "") or "")
+            self.mark_startup_phase(
+                "live_ready",
+                status="ok" if available else "unavailable",
+                detail="available=true" if available else (reason or "live_unavailable"),
+            )
+
+        QTimer.singleShot(0, self._bootstrap_app_index)
+
+    def _bootstrap_app_index(self) -> None:
+        if not self.agent:
+            self.mark_startup_phase("app_index_ready", status="error", detail="agent_unavailable")
+            return
+
+        service = getattr(self.agent, "app_indexer", None)
+        if service is None:
+            self.mark_startup_phase("app_index_ready", status="error", detail="service_unavailable")
+            return
+
+        service.start_warmup()
+        self._check_app_index_ready()
+        if service.state == "loading":
+            self._app_index_watch_timer.start()
+
+    def _check_app_index_ready(self) -> None:
+        if "app_index_ready" in self._startup_logged_phases:
+            self._app_index_watch_timer.stop()
+            return
+
+        if not self.agent:
+            self._app_index_watch_timer.stop()
+            return
+
+        service = getattr(self.agent, "app_indexer", None)
+        if service is None:
+            self._app_index_watch_timer.stop()
+            self.mark_startup_phase("app_index_ready", status="error", detail="service_unavailable")
+            return
+
+        state = getattr(service, "state", "idle")
+        if state == "ready":
+            self._app_index_watch_timer.stop()
+            self.mark_startup_phase(
+                "app_index_ready",
+                detail=f"apps={service.app_count}",
+            )
+        elif state == "error":
+            self._app_index_watch_timer.stop()
+            self.mark_startup_phase(
+                "app_index_ready",
+                status="error",
+                detail=getattr(service, "error", "") or "warmup_failed",
+            )
 
     def _init_live_session(self) -> None:
         if self.live_session:
@@ -220,9 +372,7 @@ class MainController(QObject):
 
             if self.agent:
                 self.agent.desktop_manager = self.desktop_manager
-                if hasattr(self.agent, "keyboard") and hasattr(
-                    self.agent.keyboard, "set_desktop_manager"
-                ):
+                if hasattr(self.agent.keyboard, "set_desktop_manager"):
                     self.agent.keyboard.set_desktop_manager(self.desktop_manager)
 
             logger.info("Agent Desktop initialized for sidecar preview")
@@ -262,8 +412,11 @@ class MainController(QObject):
         clean = str(text or "").strip()
         if not clean:
             return
-        if not self.agent or not self.live_session:
-            self.gui_adapter.add_error_message("Gemini Live is unavailable.")
+        if not self.agent:
+            self.gui_adapter.add_error_message(self._startup_message("AI"))
+            return
+        if not self.live_session:
+            self.gui_adapter.add_error_message(self._startup_message("Gemini Live"))
             return
         if not self.live_mode_enabled or not self.live_session.enabled:
             self.gui_adapter.add_error_message("AI is off. Turn AI on to send instructions.")
@@ -289,6 +442,8 @@ class MainController(QObject):
 
     def shutdown(self):
         try:
+            self._app_index_watch_timer.stop()
+
             if self.live_session:
                 try:
                     self.live_session.shutdown()
@@ -327,11 +482,11 @@ class MainController(QObject):
 
     @Slot(object)
     def handle_mode_changed(self, mode):
+        self.gui_adapter.current_mode = mode
         if not self.agent:
             return
         try:
             self.agent.set_mode(mode)
-            self.gui_adapter.current_mode = mode
             if self.live_session:
                 self.live_session.notify_mode_changed(mode)
             if mode == OperationMode.GUIDE and self.agent.active_workspace != "user":
@@ -341,6 +496,7 @@ class MainController(QObject):
                 )
             self._live_action_passthrough_active = False
             self._apply_click_through_policy()
+            self._sync_window_from_agent()
         except Exception as exc:
             self.gui_adapter.add_error_message(f"Failed to change mode: {exc}")
 
@@ -372,15 +528,15 @@ class MainController(QObject):
 
     @Slot(str)
     def handle_vision_changed(self, vision_mode: str):
+        mode_key = (vision_mode or "").strip().lower()
+        self._apply_vision_flags(mode_key)
+
         if not self.agent:
             return
 
-        mode_key = (vision_mode or "").strip().lower()
         if mode_key == "robo":
-            Config.USE_ROBOTICS_EYE = True
-            Config.LAZY_VISION = False
             try:
-                self.agent.robotics_eye = GeminiRoboticsEye()
+                self.agent.robotics_eye = self._create_robotics_eye()
                 self.gui_adapter.add_system_message("Vision changed to ROBO")
             except Exception as exc:
                 Config.USE_ROBOTICS_EYE = False
@@ -394,8 +550,6 @@ class MainController(QObject):
                     f"Failed to enable ROBO vision (using OCR): {exc}"
                 )
         else:
-            Config.USE_ROBOTICS_EYE = False
-            Config.LAZY_VISION = True
             self.agent.robotics_eye = None
             self.gui_adapter.add_system_message("Vision changed to OCR")
 
@@ -446,7 +600,7 @@ class MainController(QObject):
     def handle_live_mode_changed(self, enabled: bool):
         if not self.live_session:
             self.live_mode_enabled = False
-            self.gui_adapter.add_error_message("Gemini Live is unavailable.")
+            self.gui_adapter.add_error_message(self._startup_message("Gemini Live", unavailable=True))
             return
 
         success = self.live_session.set_enabled(bool(enabled))

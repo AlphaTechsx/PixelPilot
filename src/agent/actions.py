@@ -168,7 +168,7 @@ class ActionExecutor:
             self.log("No skill name provided.")
             return self._result(False, "No skill name provided")
 
-        skill = self.agent.skills.get(skill_name)
+        skill = self.agent.get_skill(skill_name)
         if not skill:
             self.log(f"Unknown skill: {skill_name}")
             return self._result(False, f"Unknown skill: {skill_name}")
@@ -380,6 +380,66 @@ class ActionExecutor:
             return self._result(True, result)
         return self._result(bool(result), f"Searched web for: {query}")
 
+    @staticmethod
+    def _app_verification_timeout_seconds() -> float:
+        try:
+            configured = float(Config.APP_LAUNCH_WAIT)
+        except Exception:
+            configured = 3.0
+        return max(6.0, configured)
+
+    def _lookup_app_candidate(self, app_name: str) -> Optional[Dict[str, Any]]:
+        try:
+            matches = self.agent.app_indexer.find_app(
+                app_name,
+                max_results=1,
+                wait=False,
+            )
+        except Exception:
+            return None
+
+        if matches:
+            return dict(matches[0] or {})
+        return None
+
+    def _verify_launched_app_window(
+        self,
+        app_name: str,
+        *,
+        prefer_title_only: bool,
+    ) -> Dict[str, Any]:
+        dm = self.desktop_manager
+        deadline = time.monotonic() + self._app_verification_timeout_seconds()
+        poll_seconds = 0.35
+        process_filter = "" if prefer_title_only else app_name
+        last_result: Dict[str, Any] = {
+            "success": False,
+            "reason": "not_found",
+            "workspace": self.agent.active_workspace,
+            "window_id": None,
+        }
+
+        while True:
+            result = ui_automation.focus_window(
+                self.agent.active_workspace,
+                dm,
+                title_contains=app_name,
+                process_name=process_filter,
+                restore=True,
+                maximize=False,
+            )
+            if result.get("success"):
+                if prefer_title_only:
+                    payload = dict(result)
+                    payload["verification_mode"] = "title_first"
+                    return payload
+                return result
+
+            last_result = result
+            if time.monotonic() >= deadline:
+                return last_result
+            time.sleep(poll_seconds)
+
     def _execute_open_app(self, params: Dict) -> Dict[str, Any]:
         app_name = params.get("app_name")
         if not app_name:
@@ -405,17 +465,31 @@ class ActionExecutor:
                 payload={"window": existing_focus.get("window")},
             )
 
-        if self.agent.app_indexer.open_app(app_name, desktop_manager=dm):
-            time.sleep(Config.APP_LAUNCH_WAIT)
-            launched_focus = ui_automation.focus_window(
-                self.agent.active_workspace,
-                dm,
-                title_contains=app_name,
-                process_name=app_name,
-                restore=True,
-                maximize=False,
+        def _on_wait_for_app_index() -> None:
+            self.log("Preparing app index...")
+
+        if self.agent.app_indexer.open_app(
+            app_name,
+            desktop_manager=dm,
+            wait=True,
+            on_wait=_on_wait_for_app_index,
+        ):
+            candidate = self._lookup_app_candidate(app_name)
+            prefer_title_only = bool(
+                candidate
+                and (
+                    str(candidate.get("launch_method") or "").strip().lower() == "modern_app"
+                    or str(candidate.get("type") or "").strip().lower() == "modern_app"
+                )
+            )
+            launched_focus = self._verify_launched_app_window(
+                app_name,
+                prefer_title_only=prefer_title_only,
             )
             if launched_focus.get("success"):
+                verification_mode = str(launched_focus.get("verification_mode") or "").strip()
+                if verification_mode == "title_first":
+                    self.log(f"Verified modern app window by title: {app_name}")
                 return self._result(
                     True,
                     f"Opened app and verified window: {app_name}",
@@ -453,24 +527,23 @@ class ActionExecutor:
                 )
             return self._result(False, f"App launched but window not verified: {app_name}")
 
+        if getattr(self.agent.app_indexer, "state", "") == "error":
+            error_text = getattr(self.agent.app_indexer, "error", "") or "unknown error"
+            self.log(f"App index unavailable, using keyboard fallback ({error_text})")
+
         start_ok = self.agent.keyboard.press_key("win", desktop_manager=dm)
         time.sleep(1.0)
         type_ok = self.agent.keyboard.type_text(app_name, desktop_manager=dm)
         time.sleep(0.8)
         enter_ok = self.agent.keyboard.press_key("enter", desktop_manager=dm)
 
-        time.sleep(Config.APP_LAUNCH_WAIT)
         shortcut_ok = bool(start_ok and type_ok and enter_ok)
         if not shortcut_ok:
             return self._result(False, f"Failed to open app: {app_name}")
 
-        launched_focus = ui_automation.focus_window(
-            self.agent.active_workspace,
-            dm,
-            title_contains=app_name,
-            process_name=app_name,
-            restore=True,
-            maximize=False,
+        launched_focus = self._verify_launched_app_window(
+            app_name,
+            prefer_title_only=False,
         )
         if launched_focus.get("success"):
             return self._result(

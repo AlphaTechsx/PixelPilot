@@ -1,19 +1,16 @@
 import ctypes
+import importlib
 import logging
 import os
 import re
 import threading
 from typing import Any, Dict, List, Optional
 
-import pyautogui
-
-from agent.actions import ActionExecutor
-from agent.capture import ScreenCapture
 from config import Config, OperationMode
-from skills import BrowserSkill, MediaSkill, SystemSkill, TimerSkill
-from tools.app_indexer import AppIndexer
-from tools.eye import LocalCVEye
-from tools.keyboard import KeyboardController
+from tools.app_index_service import AppIndexService
+
+
+logger = logging.getLogger("pixelpilot.agent")
 
 
 class StopRequested(Exception):
@@ -29,34 +26,28 @@ class AgentOrchestrator:
     session depends on.
     """
 
+    _SKILL_FACTORIES = {
+        "media": ("skills.media", "MediaSkill"),
+        "browser": ("skills.browser", "BrowserSkill"),
+        "system": ("skills.system", "SystemSkill"),
+        "timer": ("skills.timer", "TimerSkill"),
+    }
+
     def __init__(self, mode: OperationMode = None, chat_window=None, robotics_eye=None):
         self.mode = mode or Config.DEFAULT_MODE
         self.chat_window = chat_window
         self.robotics_eye = robotics_eye
 
         self._stop_event = threading.Event()
-
-        self.local_eye = LocalCVEye()
-        self.keyboard = KeyboardController()
-        self.app_indexer = AppIndexer(
+        self._keyboard = None
+        self._action_executor = None
+        self._screen_capture = None
+        self._skill_instances: dict[str, Any] = {}
+        self._app_index_service = AppIndexService(
             cache_path=Config.APP_INDEX_PATH,
-            auto_refresh=False,
+            auto_refresh=Config.APP_INDEX_AUTO_REFRESH,
             include_processes=Config.APP_INDEX_INCLUDE_PROCESSES,
         )
-        if Config.APP_INDEX_AUTO_REFRESH:
-            threading.Thread(target=self.app_indexer.refresh, daemon=True).start()
-
-        self.media_skill = MediaSkill()
-        self.browser_skill = BrowserSkill()
-        self.system_skill = SystemSkill()
-        self.timer_skill = TimerSkill()
-        self.skills = {
-            "media": self.media_skill,
-            "spotify": self.media_skill,
-            "browser": self.browser_skill,
-            "system": self.system_skill,
-            "timer": self.timer_skill,
-        }
 
         self.desktop_manager = None
         self.active_workspace = Config.DEFAULT_WORKSPACE
@@ -72,10 +63,63 @@ class AgentOrchestrator:
         self.is_magnified = False
 
         os.makedirs(Config.MEDIA_DIR, exist_ok=True)
-        self.action_executor = ActionExecutor(self)
-        self.screen_capture = ScreenCapture(self)
-
         self.log(f"AI agent initialized in {self.mode.value.upper()} mode")
+
+    @property
+    def action_executor(self):
+        if self._action_executor is None:
+            from agent.actions import ActionExecutor
+
+            self._action_executor = ActionExecutor(self)
+        return self._action_executor
+
+    @property
+    def screen_capture(self):
+        if self._screen_capture is None:
+            from agent.capture import ScreenCapture
+
+            self._screen_capture = ScreenCapture(self)
+        return self._screen_capture
+
+    @property
+    def keyboard(self):
+        if self._keyboard is None:
+            from tools.keyboard import KeyboardController
+
+            self._keyboard = KeyboardController()
+            if self.desktop_manager and hasattr(self._keyboard, "set_desktop_manager"):
+                self._keyboard.set_desktop_manager(self.desktop_manager)
+        return self._keyboard
+
+    @property
+    def app_indexer(self) -> AppIndexService:
+        return self._app_index_service
+
+    @property
+    def browser_skill(self):
+        return self.get_skill("browser")
+
+    @property
+    def media_skill(self):
+        return self.get_skill("media")
+
+    @property
+    def system_skill(self):
+        return self.get_skill("system")
+
+    @property
+    def timer_skill(self):
+        return self.get_skill("timer")
+
+    @property
+    def skills(self) -> Dict[str, Any]:
+        return {
+            "media": self.media_skill,
+            "spotify": self.media_skill,
+            "browser": self.browser_skill,
+            "system": self.system_skill,
+            "timer": self.timer_skill,
+        }
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -86,6 +130,25 @@ class AgentOrchestrator:
     def set_mode(self, mode: OperationMode) -> None:
         self.mode = mode
         self.log(f"Mode changed to {mode.value.upper()}")
+
+    def get_skill(self, skill_name: str):
+        key = (skill_name or "").strip().lower()
+        if key == "spotify":
+            key = "media"
+        if key not in self._SKILL_FACTORIES:
+            return None
+        if key in self._skill_instances:
+            return self._skill_instances[key]
+
+        module_name, class_name = self._SKILL_FACTORIES[key]
+        module = importlib.import_module(module_name)
+        skill_class = getattr(module, class_name)
+        skill = skill_class()
+        self._skill_instances[key] = skill
+        return skill
+
+    def start_app_index_warmup(self) -> bool:
+        return self.app_indexer.start_warmup()
 
     def _check_stop(self) -> None:
         if self._stop_event.is_set():
@@ -159,7 +222,6 @@ class AgentOrchestrator:
                 )
 
     def log(self, message: str) -> None:
-        logger = logging.getLogger("pixelpilot.agent")
         raw = "" if message is None else str(message)
         clean = raw.strip()
         if not clean:
@@ -183,6 +245,8 @@ class AgentOrchestrator:
 
     def get_scale_factor(self):
         try:
+            import pyautogui
+
             user32 = ctypes.windll.user32
             if not self.chat_window:
                 user32.SetProcessDPIAware()

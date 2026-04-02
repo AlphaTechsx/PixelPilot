@@ -141,6 +141,13 @@ class Config:
         2.5,
         minimum=0.1,
     )
+    LIVE_ACTION_RESPONSE_WAIT_MS = _env_int(
+        "LIVE_ACTION_RESPONSE_WAIT_MS",
+        4000,
+        minimum=0,
+        maximum=15000,
+    )
+    LIVE_FORWARD_ACTION_UPDATES = _env_bool("LIVE_FORWARD_ACTION_UPDATES", False)
     LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_CHUNKS = _env_int(
         "LIVE_AUDIO_LOSSLESS_BACKLOG_WARNING_CHUNKS",
         max(1, min(LIVE_AUDIO_LOSSLESS_QUEUE_MAX_CHUNKS, 144)),

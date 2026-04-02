@@ -1182,6 +1182,8 @@ class LiveSessionManager(QObject):
         )
 
     def _should_forward_action_update(self, payload: dict[str, Any]) -> bool:
+        if not Config.LIVE_FORWARD_ACTION_UPDATES:
+            return False
         if not self.enabled or self._transport is None or self._shutdown_event.is_set():
             return False
         if self._reconnect_in_progress:

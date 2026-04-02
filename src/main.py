@@ -2,8 +2,9 @@ import sys
 import os
 import ctypes
 import logging
+import time
 from PySide6.QtWidgets import QApplication, QSplashScreen, QSystemTrayIcon, QMenu
-from PySide6.QtCore import qInstallMessageHandler, Qt
+from PySide6.QtCore import qInstallMessageHandler, Qt, QTimer
 from PySide6.QtGui import QPixmap, QShortcut, QKeySequence, QPainter, QColor, QAction, QIcon
 from dotenv import load_dotenv
 from config import Config
@@ -106,14 +107,29 @@ def _install_qt_message_router(logger: logging.Logger):
     qInstallMessageHandler(_handler)
 
 def main():
+    process_started_at = time.perf_counter()
     app = QApplication(sys.argv)
 
-    from ui.login_dialog import require_login
-    
     if not Config.USE_DIRECT_API:
+        from ui.login_dialog import require_login
+
         if not require_login():
             print("Login cancelled. Exiting.")
             sys.exit(0)
+
+    from core.logging_setup import configure_logging, attach_gui_logging
+
+    early_qt_messages: list[tuple[object, str]] = []
+    _install_qt_message_collector(early_qt_messages)
+
+    logger, buffered_gui, log_file_path = configure_logging(adapter=None)
+    startup_logger = logging.getLogger("pixelpilot.startup")
+    startup_logger.info(
+        "STARTUP phase=process_start status=ok elapsed_ms=%d",
+        int((time.perf_counter() - process_started_at) * 1000),
+    )
+    logger.debug("Pixel Pilot starting")
+
     base_dir = os.path.dirname(os.path.abspath(__file__))
     splash_logo_path = os.path.join(base_dir, "logos", "pixelpilot-logo-creative.ico")
     if not os.path.exists(splash_logo_path):
@@ -153,14 +169,6 @@ def main():
     from ui.main_window import MainWindow
     from ui.gui_adapter import GuiAdapter
     from core.controller import MainController
-    from core.logging_setup import configure_logging, attach_gui_logging
-    from ui.global_hotkeys import GlobalHotkeyManager, MOD_CONTROL, MOD_SHIFT
-
-    early_qt_messages: list[tuple[object, str]] = []
-    _install_qt_message_collector(early_qt_messages)
-
-    logger, buffered_gui, log_file_path = configure_logging(adapter=None)
-    logger.debug("Pixel Pilot starting")
 
     def is_admin() -> bool:
         try:
@@ -179,7 +187,11 @@ def main():
         window.setWindowIcon(QIcon(task_icon_path))
     
     adapter = GuiAdapter()
-    controller = MainController(adapter, window)
+    controller = MainController(
+        adapter,
+        window,
+        startup_started_at=process_started_at,
+    )
     
     # Wire Adapter -> ChatWidget
     adapter.system_message_received.connect(window.chat_widget.add_system_message)
@@ -230,6 +242,17 @@ def main():
             QApplication.quit()
 
     window.chat_widget.logout_btn.clicked.connect(handle_logout)
+
+    window.show()
+    app.processEvents()
+    if splash:
+        splash.finish(window)
+    app.processEvents()
+
+    logging.getLogger("pixelpilot.agent").debug("Pixel Pilot GUI shown")
+    controller.mark_startup_phase("first_paint")
+
+    from ui.global_hotkeys import GlobalHotkeyManager, MOD_CONTROL, MOD_SHIFT
 
     # System tray (background minimize/restore)
     tray = None
@@ -330,12 +353,7 @@ def main():
     adapter.add_activity_message("Startup")
     adapter.add_activity_message(f"Logging to: {log_file_path}")
     adapter.add_activity_message(f"Admin: {'YES' if is_admin() else 'NO'}")
-    controller.init_agent()
-    
-    
-    if controller.agent:
-        window.chat_widget.set_operation_mode(controller.agent.mode)
-        window.chat_widget.set_vision_mode("ROBO" if controller.agent.robotics_eye else "OCR")
+    QTimer.singleShot(0, controller.start_bootstrap)
 
     for mode, msg in early_qt_messages:
         mode_name = getattr(mode, "name", "").lower()
@@ -355,11 +373,7 @@ def main():
             logger.warning(msg)
         else:
             logger.debug(msg)
-            
-    window.show()
-    if splash:
-        splash.finish(window)
-        logging.getLogger("pixelpilot.agent").debug("Pixel Pilot GUI shown")
+
     app.aboutToQuit.connect(controller.shutdown)
     sys.exit(app.exec())
 if __name__ == "__main__":

@@ -386,11 +386,21 @@ class LiveToolRegistry:
         confirmation_result = self._confirm_mutating_action(name, args)
         if confirmation_result is not None:
             return confirmation_result
-        return self.broker.submit(
+        submitted = self.broker.submit(
             name=name,
             args=args,
             handler=lambda *, cancel_event: handler(args, cancel_event),
         )
+        action_id = str(submitted.get("action_id") or "").strip()
+        wait_ms = int(Config.LIVE_ACTION_RESPONSE_WAIT_MS)
+        if not action_id or wait_ms <= 0:
+            return submitted
+
+        settled = self.broker.wait_for_action(action_id, wait_ms)
+        settled_status = str(settled.get("status") or "").strip().lower()
+        if bool(settled.get("done")) or settled_status != "queued":
+            return settled
+        return submitted
 
     @property
     def _desktop_manager(self):
