@@ -51,6 +51,7 @@ class LiveSessionManager(QObject):
     session_state_changed = Signal(str)
     action_state_changed = Signal(object)
     error_received = Signal(str)
+    status_received = Signal(str)
     audio_level_changed = Signal(float)
     assistant_audio_level_changed = Signal(float)
     availability_changed = Signal(bool, str)
@@ -107,12 +108,18 @@ class LiveSessionManager(QObject):
         self._pending_text_nudge_timer: Optional[threading.Timer] = None
         self._pending_text_nudge_generation = 0
         self._soft_interrupt_requested = False
+        self._baseline_live_thinking_level = self._normalize_thinking_level(
+            Config.LIVE_THINKING_LEVEL
+        )
+        self._thinking_level_override = ""
+        self._last_successful_reasoning_escalation_level = ""
 
         self.broker = LiveActionBroker(on_action_update=self._on_action_update)
         self.tools = LiveToolRegistry(
             agent=agent,
             broker=self.broker,
             on_capture_ready=self._on_capture_ready,
+            on_reasoning_escalation=self._request_reasoning_escalation,
         )
         self.tools.set_guidance_mode(self._is_guidance_mode())
         self.availability_changed.emit(self.is_available, self.unavailable_reason)
@@ -137,6 +144,97 @@ class LiveSessionManager(QObject):
         if mode_key == OperationMode.AUTO.value:
             return "AUTO mode is active. Mutating desktop actions may proceed without per-action confirmation."
         return ""
+
+    @staticmethod
+    def _normalize_thinking_level(level: Any) -> str:
+        clean = str(level or "").strip().lower()
+        return clean if clean in {"minimal", "low", "medium", "high"} else ""
+
+    @staticmethod
+    def _thinking_level_rank(level: Any) -> int:
+        return {
+            "minimal": 0,
+            "low": 1,
+            "medium": 2,
+            "high": 3,
+        }.get(LiveSessionManager._normalize_thinking_level(level) or "minimal", 0)
+
+    def _baseline_thinking_level(self) -> str:
+        self._baseline_live_thinking_level = self._normalize_thinking_level(
+            Config.LIVE_THINKING_LEVEL
+        )
+        return self._baseline_live_thinking_level
+
+    def _effective_thinking_level_for_compare(self) -> str:
+        return (
+            self._normalize_thinking_level(self._thinking_level_override)
+            or self._baseline_thinking_level()
+            or "minimal"
+        )
+
+    def _effective_thinking_level_for_config(self) -> str:
+        return (
+            self._normalize_thinking_level(self._thinking_level_override)
+            or self._baseline_thinking_level()
+        )
+
+    def _reset_reasoning_escalation_state(self) -> None:
+        self._baseline_live_thinking_level = self._normalize_thinking_level(
+            Config.LIVE_THINKING_LEVEL
+        )
+        self._thinking_level_override = ""
+        self._last_successful_reasoning_escalation_level = ""
+
+    def _request_reasoning_escalation(
+        self,
+        target_level: str,
+        reason: str,
+    ) -> dict[str, Any]:
+        clean_target = self._normalize_thinking_level(target_level)
+        clean_reason = str(reason or "").strip()
+        if clean_target not in {"medium", "high"}:
+            return {
+                "tool_name": "request_reasoning_escalation",
+                "ok": False,
+                "success": False,
+                "status": "failed",
+                "message": "target_level must be 'medium' or 'high'.",
+                "result": None,
+                "error": "invalid_args",
+            }
+
+        current_level = self._effective_thinking_level_for_compare()
+        current_rank = self._thinking_level_rank(current_level)
+        target_rank = self._thinking_level_rank(clean_target)
+        reconnect_required = target_rank > current_rank
+        effective_level = clean_target if reconnect_required else current_level
+
+        if reconnect_required:
+            self._thinking_level_override = clean_target
+            self._last_successful_reasoning_escalation_level = clean_target
+
+        result = {
+            "requested_level": clean_target,
+            "effective_level": effective_level,
+            "previous_effective_level": current_level,
+            "reconnect_required": reconnect_required,
+        }
+        if clean_reason:
+            result["reason_recorded"] = True
+
+        return {
+            "tool_name": "request_reasoning_escalation",
+            "ok": True,
+            "success": True,
+            "status": "succeeded",
+            "message": (
+                f"Reasoning escalation scheduled to {clean_target}."
+                if reconnect_required
+                else f"Reasoning level is already {current_level} or higher."
+            ),
+            "result": result,
+            "error": None,
+        }
 
     def _transport_cls(self):
         return DirectGeminiLiveTransport if Config.USE_DIRECT_API else BackendGeminiLiveTransport
@@ -189,6 +287,7 @@ class LiveSessionManager(QObject):
             self._cancel_typed_turn_idle_finish_timer()
             self._clear_pending_text_nudge()
             self._finish_text_turn(error="AI power was turned off.")
+            self._reset_reasoning_escalation_state()
             self._submit_async(self._disconnect_session(close_client=True), ensure_loop=False)
             self.session_state_changed.emit("disconnected")
         return True
@@ -797,6 +896,7 @@ class LiveSessionManager(QObject):
         self._cancel_typed_turn_idle_finish_timer()
         self._clear_pending_text_nudge()
         self._finish_text_turn(error="Gemini Live session shut down.")
+        self._reset_reasoning_escalation_state()
         self._voice_enabled = False
         self.voice_active_changed.emit(False)
         if self._loop and self._loop.is_running():
@@ -1126,10 +1226,11 @@ class LiveSessionManager(QObject):
         }
         if Config.LIVE_ENABLE_CONTEXT_WINDOW_COMPRESSION:
             config["context_window_compression"] = {"sliding_window": {}}
-        if Config.LIVE_THINKING_LEVEL or Config.LIVE_INCLUDE_THOUGHTS:
+        effective_thinking_level = self._effective_thinking_level_for_config()
+        if effective_thinking_level or Config.LIVE_INCLUDE_THOUGHTS:
             thinking_config: dict[str, Any] = {}
-            if Config.LIVE_THINKING_LEVEL:
-                thinking_config["thinking_level"] = Config.LIVE_THINKING_LEVEL
+            if effective_thinking_level:
+                thinking_config["thinking_level"] = effective_thinking_level
             if Config.LIVE_INCLUDE_THOUGHTS:
                 thinking_config["include_thoughts"] = True
             config["thinking_config"] = thinking_config
@@ -1285,6 +1386,7 @@ class LiveSessionManager(QObject):
     async def _handle_tool_call(self, tool_call: Any) -> None:
         responses = []
         function_calls = []
+        pending_reasoning_escalation = ""
         if isinstance(tool_call, dict):
             function_calls = tool_call.get("function_calls") or []
         for function_call in function_calls:
@@ -1298,6 +1400,22 @@ class LiveSessionManager(QObject):
                 str(function_call.get("name") or ""),
                 args,
             )
+            if str(function_call.get("name") or "").strip() == "request_reasoning_escalation":
+                escalation_result = result.get("result") if isinstance(result, dict) else None
+                target_level = ""
+                if isinstance(escalation_result, dict) and bool(
+                    escalation_result.get("reconnect_required")
+                ):
+                    target_level = self._normalize_thinking_level(
+                        escalation_result.get("effective_level")
+                        or escalation_result.get("requested_level")
+                    )
+                if (
+                    target_level
+                    and self._thinking_level_rank(target_level)
+                    > self._thinking_level_rank(pending_reasoning_escalation)
+                ):
+                    pending_reasoning_escalation = target_level
             responses.append(
                 {
                     "id": function_call.get("id"),
@@ -1308,6 +1426,14 @@ class LiveSessionManager(QObject):
 
         if responses and self._transport is not None:
             await self._transport.send_tool_responses(responses)
+
+        if (
+            pending_reasoning_escalation
+            and self.enabled
+            and not self._shutdown_event.is_set()
+        ):
+            self.status_received.emit("Increasing reasoning depth and resuming...")
+            await self._reconnect_with_resume()
 
         while self._pending_capture_paths and self._transport is not None:
             path, summary = self._pending_capture_paths.popleft()

@@ -286,6 +286,7 @@ class MainController(QObject):
             self.live_session.session_state_changed.connect(self._handle_live_session_state)
             self.live_session.action_state_changed.connect(self._handle_live_action_state)
             self.live_session.error_received.connect(self._handle_live_error)
+            self.live_session.status_received.connect(self._handle_live_status)
             self.live_session.audio_level_changed.connect(self._handle_live_audio_level)
             self.live_session.assistant_audio_level_changed.connect(
                 self._handle_live_assistant_audio_level
@@ -639,6 +640,11 @@ class MainController(QObject):
     @Slot(str)
     def _handle_live_error(self, message: str):
         self.gui_adapter.add_error_message(message)
+
+    @Slot(str)
+    def _handle_live_status(self, message: str):
+        if str(message or "").strip():
+            self.gui_adapter.add_system_message(str(message))
 
     @Slot(float)
     def _handle_live_audio_level(self, level: float):

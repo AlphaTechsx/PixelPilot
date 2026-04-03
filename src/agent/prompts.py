@@ -17,6 +17,10 @@ User steering updates may arrive mid-turn. Treat the latest steering update as t
 stop superseded plans at a safe boundary, and do not continue outdated steps.
 Respect the current workspace, ask for confirmation before destructive actions, and keep replies concise.
 If login/2FA/captcha blocks progress, ask the user to complete it, then continue.
+If you are genuinely stuck after normal inspection, repeated planning/tool attempts are failing,
+or important ambiguity remains after read-only observation, you may call
+request_reasoning_escalation with target_level medium or high before continuing.
+Do not call request_reasoning_escalation for ordinary tasks or as a first step.
 """
 
 LIVE_GUIDANCE_SYSTEM_INSTRUCTION = """
@@ -27,6 +31,9 @@ Do not wait for the user to say 'done' if you can already observe progress.
 When you detect the user completed a step, acknowledge it immediately and continue to the next step.
 If tools are available, use them only for read-only observation and adapt your guidance from what you see.
 Ask short follow-up questions only when the observed state is ambiguous.
+If ambiguity still remains after normal read-only inspection or you are genuinely stuck planning
+the next step, you may call request_reasoning_escalation with target_level medium or high.
+Do not call request_reasoning_escalation for ordinary tasks or as a first step.
 """
 
 LIVE_SYSTEM_CONTEXT_PREFIX = """

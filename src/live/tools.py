@@ -24,6 +24,7 @@ class LiveToolRegistry:
         "capture_screen",
         "get_action_status",
         "wait_for_action",
+        "request_reasoning_escalation",
     }
     MUTATING_TOOL_NAMES = {
         "mouse_click",
@@ -41,10 +42,12 @@ class LiveToolRegistry:
         agent,
         broker: LiveActionBroker,
         on_capture_ready: Optional[Callable[[str, dict[str, Any]], None]] = None,
+        on_reasoning_escalation: Optional[Callable[[str, str], dict[str, Any]]] = None,
     ) -> None:
         self.agent = agent
         self.broker = broker
         self.on_capture_ready = on_capture_ready
+        self.on_reasoning_escalation = on_reasoning_escalation
         self._guidance_mode = False
         self.last_snapshot_summary: Optional[dict[str, Any]] = None
         self.last_capture_summary: Optional[dict[str, Any]] = None
@@ -278,6 +281,25 @@ class LiveToolRegistry:
                     "required": ["action_id"],
                 },
             },
+            {
+                "name": "request_reasoning_escalation",
+                "description": (
+                    "Internal runtime control. Use this only when you are genuinely stuck after normal "
+                    "inspection, repeated planning/tool attempts are failing, or important ambiguity remains "
+                    "after read-only observation. Do not use it for ordinary tasks or as a first step."
+                ),
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "target_level": {
+                            "type": "STRING",
+                            "enum": ["medium", "high"],
+                        },
+                        "reason": {"type": "STRING"},
+                    },
+                    "required": ["target_level"],
+                },
+            },
         ]
 
     def get_declarations(self, *, read_only_only: bool = False) -> list[dict[str, Any]]:
@@ -367,6 +389,8 @@ class LiveToolRegistry:
                 str(payload.get("action_id") or ""),
                 int(payload.get("timeout_ms") or 1000),
             )
+        if tool_name == "request_reasoning_escalation":
+            return self._handle_request_reasoning_escalation(payload)
 
         return self._tool_response(
             tool_name,
@@ -374,6 +398,18 @@ class LiveToolRegistry:
             message=f"Unknown tool: {tool_name}",
             error="unknown_tool",
         )
+
+    def _handle_request_reasoning_escalation(self, args: dict[str, Any]) -> dict[str, Any]:
+        target_level = str(args.get("target_level") or "").strip().lower()
+        reason = str(args.get("reason") or "").strip()
+        if self.on_reasoning_escalation is None:
+            return self._tool_response(
+                "request_reasoning_escalation",
+                success=False,
+                message="Reasoning escalation is unavailable.",
+                error="reasoning_escalation_unavailable",
+            )
+        return self.on_reasoning_escalation(target_level, reason)
 
     def _queue_action(
         self,
