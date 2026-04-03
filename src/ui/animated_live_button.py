@@ -4,6 +4,8 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, QTimer, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QPushButton
 
+from .glass import BackdropController, paint_glass_background
+
 
 class AnimatedLiveButton(QPushButton):
     def __init__(self, parent=None):
@@ -17,10 +19,17 @@ class AnimatedLiveButton(QPushButton):
         self._visual_state = "off"
         self._phase = 0.0
         self._hovered = False
+        self._backdrop_controller: BackdropController | None = None
 
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(16)
         self._tick_timer.timeout.connect(self._tick)
+
+    def set_backdrop_controller(self, controller: BackdropController | None) -> None:
+        self._backdrop_controller = controller
+        if controller is not None:
+            controller.register_widget(self)
+        self.update()
 
     def visual_state(self) -> str:
         return self._visual_state
@@ -88,19 +97,29 @@ class AnimatedLiveButton(QPushButton):
         rect = self.rect().adjusted(1, 1, -1, -1)
         bg_color, border_color, glyph_color, accent_color = self._palette_for_state()
 
+        glass_accent = accent_color if self.isEnabled() else QColor("#cbd5e1")
         if self._hovered and self.isEnabled():
-            bg_color = self._blend(bg_color, QColor("#ffffff"), 0.18)
-            border_color = self._blend(border_color, QColor("#a8b8ca"), 0.22)
-        if self.isDown():
-            bg_color = self._blend(bg_color, QColor("#0f172a"), 0.08)
+            glass_accent = self._blend(glass_accent, QColor("#ffffff"), 0.16)
+        if self.isDown() and self.isEnabled():
+            glass_accent = self._blend(glass_accent, QColor("#0f172a"), 0.12)
 
-        painter.setPen(QPen(border_color, 1.25))
-        painter.setBrush(bg_color)
-        painter.drawRoundedRect(rect, 11, 11)
+        paint_glass_background(
+            painter,
+            self,
+            QRectF(rect),
+            controller=self._backdrop_controller,
+            role="control",
+            corner_radius=11.0,
+            accent=glass_accent,
+        )
 
         core_rect = rect.adjusted(7, 4, -7, -4)
-        painter.setPen(QPen(self._blend(border_color, QColor("#ffffff"), 0.14), 1.0))
-        painter.setBrush(self._blend(bg_color, QColor("#ffffff"), 0.08))
+        core_fill = self._blend(bg_color, QColor("#ffffff"), 0.22 if self._hovered else 0.14)
+        core_fill.setAlpha(86 if self.isEnabled() else 66)
+        core_border = self._blend(border_color, QColor("#ffffff"), 0.18)
+        core_border.setAlpha(138 if self.isEnabled() else 112)
+        painter.setPen(QPen(core_border, 1.0))
+        painter.setBrush(core_fill)
         painter.drawRoundedRect(core_rect, 9, 9)
 
         center = core_rect.center()

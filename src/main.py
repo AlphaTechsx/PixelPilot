@@ -166,8 +166,9 @@ def main():
             splash.show()
             app.processEvents()
 
-    from ui.main_window import MainWindow
+    from ui.desktop_shell import create_desktop_shell
     from ui.gui_adapter import GuiAdapter
+    from ui.state_models import MessageFeedModel, UiActionsBridge, UiStateStore
     from core.controller import MainController
 
     def is_admin() -> bool:
@@ -176,37 +177,30 @@ def main():
         except Exception:
             return False
 
+    ui_state_store = UiStateStore()
+    message_feed_model = MessageFeedModel()
+    actions = UiActionsBridge()
+    adapter = GuiAdapter(
+        ui_state_store=ui_state_store,
+        message_feed_model=message_feed_model,
+    )
+
     try:
-        window = MainWindow()
+        window = create_desktop_shell(ui_state_store, actions)
     except Exception:
-        logger.exception("Failed to construct main window")
+        logger.exception("Failed to construct desktop shell")
         if splash:
             splash.close()
         raise
     if os.path.exists(task_icon_path):
         window.setWindowIcon(QIcon(task_icon_path))
-    
-    adapter = GuiAdapter()
+
+    window.connect_adapter(adapter)
     controller = MainController(
         adapter,
         window,
         startup_started_at=process_started_at,
     )
-    
-    # Wire Adapter -> ChatWidget
-    adapter.system_message_received.connect(window.chat_widget.add_system_message)
-    adapter.output_message_received.connect(window.chat_widget.add_output_message)
-    adapter.error_message_received.connect(window.chat_widget.add_error_message)
-    adapter.user_message_received.connect(window.chat_widget.add_user_message)
-    adapter.activity_message_received.connect(window.chat_widget.add_activity_message)
-    adapter.final_answer_received.connect(window.chat_widget.add_final_answer)
-    adapter.live_transcript_received.connect(window.chat_widget.on_live_transcript)
-    adapter.live_session_state_received.connect(window.chat_widget.set_live_session_state)
-    adapter.live_action_state_received.connect(window.chat_widget.on_live_action_state)
-    adapter.live_audio_level_received.connect(window.chat_widget.on_live_audio_level)
-    adapter.assistant_audio_level_received.connect(window.chat_widget.on_assistant_audio_level)
-    adapter.live_availability_received.connect(window.chat_widget.set_live_availability)
-    adapter.live_voice_active_received.connect(window.chat_widget.set_live_voice_active)
 
     # Attach GUI logging now that adapter exists.
     attach_gui_logging(logger, adapter, buffered_gui)
@@ -218,13 +212,26 @@ def main():
     sys.stdout = GuiStream(logger, is_error=False)
     sys.stderr = GuiStream(logger, is_error=True)
 
-    # Wire ChatWidget -> Controller
-    window.chat_widget.command_received.connect(controller.handle_user_command)
-    window.chat_widget.mode_changed.connect(controller.handle_mode_changed)
-    window.chat_widget.vision_changed.connect(controller.handle_vision_changed)
-    window.chat_widget.live_mode_changed.connect(controller.handle_live_mode_changed)
-    window.chat_widget.live_voice_toggled.connect(controller.handle_live_voice_toggled)
-    window.chat_widget.agent_view_visibility_changed.connect(controller.update_sidecar_visibility)
+    # Wire UI actions -> Controller / shell
+    actions.commandSubmitted.connect(window.echo_user_command)
+    actions.commandSubmitted.connect(controller.handle_user_command)
+    actions.modeSelected.connect(lambda value: controller.handle_mode_changed(Config.get_mode(value)))
+    actions.visionSelected.connect(lambda value: controller.handle_vision_changed(str(value).lower()))
+    actions.liveModeRequested.connect(controller.handle_live_mode_changed)
+    actions.liveVoiceRequested.connect(controller.handle_live_voice_toggled)
+    actions.backgroundVisibilityToggleRequested.connect(window.toggle_background_visibility)
+    actions.minimizeRequested.connect(window.minimize_to_background)
+    actions.restoreRequested.connect(window.restore_from_background)
+    actions.expandToggleRequested.connect(window.toggle_expand)
+    actions.clickThroughToggleRequested.connect(controller.toggle_click_through)
+    actions.agentViewToggleRequested.connect(
+        lambda: (
+            adapter.ui_state_store.toggle_agent_view_requested()
+            if adapter.ui_state_store is not None
+            else None
+        )
+    )
+    actions.agentViewToggleRequested.connect(window.refresh_agent_preview_visibility)
 
     # Logout handler
     def handle_logout():
@@ -241,12 +248,17 @@ def main():
         else:
             QApplication.quit()
 
-    window.chat_widget.logout_btn.clicked.connect(handle_logout)
+    actions.logoutRequested.connect(handle_logout)
+    actions.quitRequested.connect(QApplication.quit)
 
     window.show()
     app.processEvents()
     if splash:
-        splash.finish(window)
+        shortcut_host = window.shortcut_host()
+        if shortcut_host is not None:
+            splash.finish(shortcut_host)
+        else:
+            splash.close()
     app.processEvents()
 
     logging.getLogger("pixelpilot.agent").debug("Pixel Pilot GUI shown")
@@ -257,12 +269,14 @@ def main():
     # System tray (background minimize/restore)
     tray = None
     if QSystemTrayIcon.isSystemTrayAvailable():
-        tray = QSystemTrayIcon(window)
+        tray = QSystemTrayIcon(window.shortcut_host())
         tray.setToolTip("Pixel Pilot")
         if os.path.exists(task_icon_path):
             tray.setIcon(QIcon(task_icon_path))
         else:
-            tray.setIcon(window.windowIcon())
+            icon = window.windowIcon()
+            if icon is not None:
+                tray.setIcon(icon)
 
         tray_menu = QMenu()
         show_action = QAction("Show Pixel Pilot", tray_menu)
@@ -294,34 +308,35 @@ def main():
     # Global shortcuts
     # Keep references; otherwise Python GC can deactivate QShortcut.
     window._qt_shortcuts = []
+    shortcut_host = window.shortcut_host()
+    if shortcut_host is not None:
+        toggle_interactive = QShortcut(QKeySequence("Ctrl+Shift+Z"), shortcut_host)
+        toggle_interactive.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        toggle_interactive.activated.connect(controller.toggle_click_through)
+        window._qt_shortcuts.append(toggle_interactive)
 
-    toggle_interactive = QShortcut(QKeySequence("Ctrl+Shift+Z"), window)
-    toggle_interactive.setContext(Qt.ShortcutContext.ApplicationShortcut)
-    toggle_interactive.activated.connect(controller.toggle_click_through)
-    window._qt_shortcuts.append(toggle_interactive)
+        stop_request = QShortcut(QKeySequence("Ctrl+Shift+X"), shortcut_host)
+        stop_request.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        stop_request.activated.connect(controller.stop_current_turn)
+        window._qt_shortcuts.append(stop_request)
 
-    stop_request = QShortcut(QKeySequence("Ctrl+Shift+X"), window)
-    stop_request.setContext(Qt.ShortcutContext.ApplicationShortcut)
-    stop_request.activated.connect(controller.stop_current_turn)
-    window._qt_shortcuts.append(stop_request)
+        close_app = QShortcut(QKeySequence("Ctrl+Shift+Q"), shortcut_host)
+        close_app.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        close_app.activated.connect(QApplication.quit)
+        window._qt_shortcuts.append(close_app)
 
-    close_app = QShortcut(QKeySequence("Ctrl+Shift+Q"), window)
-    close_app.setContext(Qt.ShortcutContext.ApplicationShortcut)
-    close_app.activated.connect(QApplication.quit)
-    window._qt_shortcuts.append(close_app)
+        background_toggle = QShortcut(QKeySequence("Ctrl+Shift+M"), shortcut_host)
+        background_toggle.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        background_toggle.activated.connect(window.toggle_background_visibility)
+        window._qt_shortcuts.append(background_toggle)
 
-    background_toggle = QShortcut(QKeySequence("Ctrl+Shift+M"), window)
-    background_toggle.setContext(Qt.ShortcutContext.ApplicationShortcut)
-    background_toggle.activated.connect(window.toggle_background_visibility)
-    window._qt_shortcuts.append(background_toggle)
-
-    details_toggle = QShortcut(QKeySequence("Ctrl+Shift+D"), window)
-    details_toggle.setContext(Qt.ShortcutContext.ApplicationShortcut)
-    details_toggle.activated.connect(window.toggle_expand)
-    window._qt_shortcuts.append(details_toggle)
+        details_toggle = QShortcut(QKeySequence("Ctrl+Shift+D"), shortcut_host)
+        details_toggle.setContext(Qt.ShortcutContext.ApplicationShortcut)
+        details_toggle.activated.connect(window.toggle_expand)
+        window._qt_shortcuts.append(details_toggle)
 
     # Windows system-wide hotkeys (work even when the overlay is click-through/unfocused)
-    hotkeys = GlobalHotkeyManager(parent=window)
+    hotkeys = GlobalHotkeyManager(parent=shortcut_host)
     window._global_hotkeys = hotkeys
 
     HK_TOGGLE = 1

@@ -206,8 +206,6 @@ class LiveSessionManager(QObject):
             return None, "Message is empty."
         if not self.enabled:
             return None, "AI power is off."
-        if self._voice_enabled:
-            return None, "Stop live voice before sending a typed command."
         self._clear_stale_text_turn_if_idle(reason="new_submit")
         with self._turn_state_lock:
             if self._active_text_turn_id is not None:
@@ -332,7 +330,6 @@ class LiveSessionManager(QObject):
             turn_id = self._active_text_turn_id
             if (
                 turn_id is None
-                or self._voice_enabled
                 or self._shutdown_event.is_set()
                 or self.broker.has_pending()
                 or not self._speaker_queue_is_idle()
@@ -377,7 +374,7 @@ class LiveSessionManager(QObject):
                 return
             if self._active_text_turn_id != turn_id:
                 return
-            if self._voice_enabled or self._shutdown_event.is_set() or self.broker.has_pending():
+            if self._shutdown_event.is_set() or self.broker.has_pending():
                 return
             idle_seconds = max(0.0, float(Config.LIVE_TYPED_TURN_IDLE_FINISH_SECONDS))
             if idle_seconds > 0.0 and (
@@ -417,7 +414,7 @@ class LiveSessionManager(QObject):
         timer: Optional[threading.Timer] = None
         with self._turn_state_lock:
             turn_id = self._active_text_turn_id
-            if turn_id is None or self._voice_enabled or self._shutdown_event.is_set():
+            if turn_id is None or self._shutdown_event.is_set():
                 return False
             if self.broker.has_pending() or not self._speaker_queue_is_idle():
                 return False
@@ -472,7 +469,6 @@ class LiveSessionManager(QObject):
         with self._turn_state_lock:
             if (
                 not str(self._pending_text_nudge or "").strip()
-                or self._voice_enabled
                 or self._shutdown_event.is_set()
             ):
                 return
@@ -557,7 +553,6 @@ class LiveSessionManager(QObject):
             pending_text = str(self._pending_text_nudge or "").strip()
             if (
                 not pending_text
-                or self._voice_enabled
                 or self._shutdown_event.is_set()
                 or self.broker.has_pending()
             ):
@@ -722,21 +717,27 @@ class LiveSessionManager(QObject):
         if not self.enabled:
             self.error_received.emit("Enable Live mode before starting voice.")
             return False
-        with self._turn_state_lock:
-            active_turn = self._active_text_turn_id is not None
-        if active_turn:
-            self.error_received.emit("Wait for the current reply before starting live voice.")
-            return False
         clear_stop = getattr(self.agent, "clear_stop_request", None)
         if callable(clear_stop):
             try:
                 clear_stop()
             except Exception:
                 pass
+        if self._voice_enabled:
+            return True
+        submitted = self._submit_async(self._start_voice_async())
+        if not submitted:
+            message = str(getattr(self, "unavailable_reason", "") or "").strip()
+            if not message:
+                message = (
+                    "Gemini Live voice could not start because the background session was unavailable."
+                )
+            self.error_received.emit(message)
+            return False
         self._voice_enabled = True
         self.voice_active_changed.emit(True)
         self.session_state_changed.emit("connecting")
-        return self._submit_async(self._start_voice_async())
+        return True
 
     def stop_voice(self) -> bool:
         self._voice_enabled = False
@@ -893,11 +894,17 @@ class LiveSessionManager(QObject):
             raise
 
     async def _start_voice_async(self) -> None:
-        await self._ensure_session_with_retry()
-        if self._mic_task and not self._mic_task.done():
-            return
-        self._mic_task = asyncio.create_task(self._microphone_loop())
-        self.session_state_changed.emit("listening")
+        try:
+            await self._ensure_session_with_retry()
+            if self._mic_task and not self._mic_task.done():
+                return
+            self._mic_task = asyncio.create_task(self._microphone_loop())
+            self.session_state_changed.emit("listening")
+        except Exception:
+            if self._voice_enabled:
+                self._voice_enabled = False
+                self.voice_active_changed.emit(False)
+            raise
 
     async def _ensure_session_with_retry(self, retries: int = 1):
         attempt = 0

@@ -2,6 +2,8 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QPushButton
 
+from .glass import BackdropController, paint_glass_background
+
 
 class WorkspaceBadgeButton(QPushButton):
     def __init__(self, parent=None):
@@ -16,7 +18,14 @@ class WorkspaceBadgeButton(QPushButton):
         self._clickable = False
         self._agent_view_shown = False
         self._hovered = False
+        self._backdrop_controller: BackdropController | None = None
         self.setProperty("workspace", self._workspace)
+
+    def set_backdrop_controller(self, controller: BackdropController | None) -> None:
+        self._backdrop_controller = controller
+        if controller is not None:
+            controller.register_widget(self)
+        self.update()
 
     def workspace(self) -> str:
         return self._workspace
@@ -62,10 +71,25 @@ class WorkspaceBadgeButton(QPushButton):
 
         rect = self.rect().adjusted(1, 1, -1, -1)
         bg_color, border_color, glyph_color = self._palette()
+        accent = border_color if (self._hovered and self._clickable) or self._agent_view_shown else None
+        paint_glass_background(
+            painter,
+            self,
+            QRectF(rect),
+            controller=self._backdrop_controller,
+            role="control",
+            corner_radius=10.0,
+            accent=accent,
+        )
 
-        painter.setPen(QPen(border_color, 1.25))
-        painter.setBrush(bg_color)
-        painter.drawRoundedRect(rect, 10, 10)
+        inner = rect.adjusted(7, 5, -7, -5)
+        inner_fill = QColor(bg_color)
+        inner_fill.setAlpha(70 if self.isEnabled() else 48)
+        inner_border = QColor(border_color)
+        inner_border.setAlpha(120 if self.isEnabled() else 90)
+        painter.setPen(QPen(inner_border, 1.0))
+        painter.setBrush(inner_fill)
+        painter.drawRoundedRect(inner, 8, 8)
 
         core_rect = rect.adjusted(9, 6, -9, -6)
         icon_pen = QPen(glyph_color, 1.45, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)

@@ -4,6 +4,8 @@ from PySide6.QtCore import QPointF, QTimer, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QPushButton
 
+from .glass import BackdropController, paint_glass_background
+
 
 class AnimatedMicButton(QPushButton):
     def __init__(self, parent=None):
@@ -19,10 +21,17 @@ class AnimatedMicButton(QPushButton):
         self._phase = 0.0
         self._ripple_phase = 0.0
         self._hovered = False
+        self._backdrop_controller: BackdropController | None = None
 
         self._tick_timer = QTimer(self)
         self._tick_timer.setInterval(16)
         self._tick_timer.timeout.connect(self._tick)
+
+    def set_backdrop_controller(self, controller: BackdropController | None) -> None:
+        self._backdrop_controller = controller
+        if controller is not None:
+            controller.register_widget(self)
+        self.update()
 
     def visual_state(self) -> str:
         return self._visual_state
@@ -83,13 +92,19 @@ class AnimatedMicButton(QPushButton):
         pulse = 1.0 + math.sin(math.radians(self._phase)) * 0.05 + base_level * 0.08
 
         bg_color, border_color, glyph_color, glow_color = self._palette_for_state()
+        glass_accent = glow_color if self.isEnabled() else QColor("#cbd5e1")
         if self._hovered and self._visual_state == "idle":
-            bg_color = self._blend(bg_color, QColor("#dbe4ef"), 0.5)
-            border_color = self._blend(border_color, QColor("#94a3b8"), 0.35)
+            glass_accent = self._blend(glass_accent, QColor("#dbe4ef"), 0.35)
 
-        painter.setPen(QPen(border_color, 1.25))
-        painter.setBrush(bg_color)
-        painter.drawRoundedRect(rect, 11, 11)
+        paint_glass_background(
+            painter,
+            self,
+            rect,
+            controller=self._backdrop_controller,
+            role="control",
+            corner_radius=11.0,
+            accent=glass_accent,
+        )
 
         center = rect.center()
         if self._visual_state == "listening_user":
@@ -112,8 +127,12 @@ class AnimatedMicButton(QPushButton):
         radius = base_radius * pulse
         core_rect = self.rect().adjusted(7, 4, -7, -4)
         core_rect.moveCenter(center)
-        painter.setPen(QPen(self._blend(border_color, QColor("#ffffff"), 0.15), 1.2))
-        painter.setBrush(self._blend(bg_color, QColor("#ffffff"), 0.12))
+        core_fill = self._blend(bg_color, QColor("#ffffff"), 0.18)
+        core_fill.setAlpha(84 if self.isEnabled() else 60)
+        core_border = self._blend(border_color, QColor("#ffffff"), 0.18)
+        core_border.setAlpha(140 if self.isEnabled() else 110)
+        painter.setPen(QPen(core_border, 1.2))
+        painter.setBrush(core_fill)
         painter.drawRoundedRect(core_rect, 10, 10)
 
         icon_rect = core_rect.adjusted(6, 3, -6, -3)

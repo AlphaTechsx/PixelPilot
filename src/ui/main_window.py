@@ -1,11 +1,13 @@
 from typing import Optional
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtGui import QCursor, QGuiApplication
 from PySide6.QtWidgets import QApplication, QMainWindow
 
 from config import Config
 from .chat_widget import ChatWidget
+from .glass import BackdropController
+from .minimized_notch import MinimizedNotchWindow
 from .sidecar_preview import SidecarPreview
 
 
@@ -13,7 +15,7 @@ class MainWindow(QMainWindow):
     BAR_SIZE = (920, 84)
     EXTENDED_SIZE = (920, 660)
 
-    def __init__(self):
+    def __init__(self, *, enable_backdrop: bool | None = None):
         super().__init__()
         self.setWindowTitle("Pixel Pilot")
         self.setWindowFlags(
@@ -28,6 +30,8 @@ class MainWindow(QMainWindow):
         self.expanded = False
         self._background_hidden = False
         self.sidecar: Optional[SidecarPreview] = None
+        self._backdrop_enabled = Config.GUI_ENABLE_GLASS_BACKDROP if enable_backdrop is None else bool(enable_backdrop)
+        self.minimized_notch = MinimizedNotchWindow(enable_backdrop=self._backdrop_enabled)
 
         self.chat_widget = ChatWidget()
         self.setCentralWidget(self.chat_widget)
@@ -39,7 +43,31 @@ class MainWindow(QMainWindow):
         self.chat_widget.close_btn.clicked.connect(QApplication.quit)
         self.chat_widget.agent_view_visibility_changed.connect(self._refresh_sidecar_visibility)
 
+        self._backdrop_controller: BackdropController | None = None
+        if self._backdrop_enabled:
+            self._backdrop_controller = BackdropController(
+                self,
+                excluded_hwnds=self._glass_excluded_hwnds,
+                steady_fps=8,
+                burst_fps=12,
+            )
+            self.minimized_notch.set_excluded_hwnds_provider(self._glass_excluded_hwnds)
+        self.chat_widget.attach_backdrop_controller(self._backdrop_controller)
+
         self.center_at_top()
+
+    def _glass_excluded_hwnds(self) -> list[int]:
+        handles: list[int] = []
+        for widget in (self, self.minimized_notch, self.sidecar):
+            if widget is None:
+                continue
+            try:
+                hwnd = int(widget.winId())
+            except Exception:
+                continue
+            if hwnd:
+                handles.append(hwnd)
+        return handles
 
     def ensure_sidecar(self):
         if self.sidecar is not None:
@@ -154,13 +182,17 @@ class MainWindow(QMainWindow):
         self.set_expanded(not self.expanded)
 
     def minimize_to_background(self):
+        screen = self.screen() or QGuiApplication.screenAt(self.frameGeometry().center()) or QApplication.primaryScreen()
         self._background_hidden = True
         if self.sidecar:
             self.sidecar.hide()
         self.hide()
+        self.minimized_notch.show_for_screen(screen)
+        QTimer.singleShot(0, self.chat_widget.ensure_notch_voice_mode)
 
     def restore_from_background(self):
         self._background_hidden = False
+        self.minimized_notch.hide_notch()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -203,8 +235,12 @@ class MainWindow(QMainWindow):
         super().hideEvent(event)
         if self.sidecar:
             self.sidecar.hide()
+        if not self._background_hidden:
+            self.minimized_notch.hide_notch()
 
     def closeEvent(self, event):
+        self.minimized_notch.hide_notch()
+        self.minimized_notch.close()
         if self.sidecar:
             self.sidecar.close()
             self.sidecar = None

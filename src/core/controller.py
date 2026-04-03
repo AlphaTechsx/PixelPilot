@@ -118,6 +118,7 @@ class MainController(QObject):
         )
         try:
             self.main_window.set_click_through_enabled(click_through)
+            self.gui_adapter.set_click_through_enabled(click_through)
         except Exception:
             pass
 
@@ -152,18 +153,14 @@ class MainController(QObject):
         return GeminiRoboticsEye()
 
     def _sync_window_from_agent(self) -> None:
-        if not self.agent or not self.main_window or not hasattr(self.main_window, "chat_widget"):
+        if not self.agent:
             return
 
         try:
-            self.main_window.chat_widget.set_operation_mode(self.agent.mode)
-            self.main_window.chat_widget.set_vision_mode(
-                "ROBO" if self.agent.robotics_eye else "OCR"
-            )
-            self.main_window.chat_widget.set_workspace_status(self.agent.active_workspace)
-            self.main_window.chat_widget.set_agent_view_enabled(
-                self.agent.active_workspace == "agent"
-            )
+            self.gui_adapter.set_operation_mode(self.agent.mode)
+            self.gui_adapter.set_vision_mode("ROBO" if self.agent.robotics_eye else "OCR")
+            self.gui_adapter.set_workspace(self.agent.active_workspace)
+            self.gui_adapter.set_agent_view_enabled(self.agent.active_workspace == "agent")
         except Exception:
             pass
 
@@ -351,24 +348,19 @@ class MainController(QObject):
             from desktop.desktop_manager import AgentDesktopManager
 
             if self.desktop_manager and getattr(self.desktop_manager, "is_created", False):
-                if self.main_window and hasattr(self.main_window, "ensure_sidecar"):
-                    sidecar = self.main_window.ensure_sidecar()
-                    sidecar.set_capture_source(self.desktop_manager)
+                self.main_window.attach_agent_preview_source(self.desktop_manager)
                 return
 
             self.desktop_manager = AgentDesktopManager(Config.AGENT_DESKTOP_NAME)
             if not self.desktop_manager.create_desktop():
                 logger.warning("Failed to create Agent Desktop")
                 self.desktop_manager = None
-                if self.main_window and getattr(self.main_window, "sidecar", None):
-                    self.main_window.sidecar.hide()
+                self.main_window.attach_agent_preview_source(None)
                 return
 
             self.desktop_manager.initialize_shell()
 
-            if self.main_window and hasattr(self.main_window, "ensure_sidecar"):
-                sidecar = self.main_window.ensure_sidecar()
-                sidecar.set_capture_source(self.desktop_manager)
+            self.main_window.attach_agent_preview_source(self.desktop_manager)
 
             if self.agent:
                 self.agent.desktop_manager = self.desktop_manager
@@ -380,30 +372,31 @@ class MainController(QObject):
         except Exception as exc:
             logger.exception("Failed to initialize Agent Desktop: %s", exc)
             self.desktop_manager = None
-            if self.main_window and getattr(self.main_window, "sidecar", None):
-                self.main_window.sidecar.hide()
+            self.main_window.attach_agent_preview_source(None)
 
     @Slot(str, str, object)
     def handle_confirmation(self, title, text, payload):
-        dialog = ConfirmationDialog(self.main_window, title, text)
+        dialog = ConfirmationDialog(self.main_window.dialog_parent(), title, text)
         payload["result"] = dialog.exec() == QDialog.DialogCode.Accepted
         payload["event"].set()
 
     @Slot(object)
     def handle_screenshot_prep(self, payload):
-        self.main_window.hide()
+        state = self.main_window.prepare_for_screenshot()
+        payload.update(state)
         QCoreApplication.processEvents()
         payload["event"].set()
 
     @Slot(object)
     def handle_screenshot_restore(self, payload):
-        self.main_window.show()
+        self.main_window.restore_after_screenshot(payload)
         payload["event"].set()
 
     @Slot(bool, object)
     def handle_click_through(self, enable, payload):
         try:
             self.main_window.set_click_through_enabled(bool(enable))
+            self.gui_adapter.set_click_through_enabled(bool(enable))
         except Exception:
             pass
         payload["event"].set()
@@ -443,8 +436,9 @@ class MainController(QObject):
 
     def toggle_click_through(self):
         try:
-            current = bool(getattr(self.main_window, "click_through_enabled", False))
+            current = bool(self.main_window.click_through_enabled())
             self.main_window.set_click_through_enabled(not current)
+            self.gui_adapter.set_click_through_enabled(not current)
         except Exception as exc:
             self.gui_adapter.add_error_message(
                 f"Failed to toggle interactivity: {exc}"
@@ -483,8 +477,7 @@ class MainController(QObject):
                     pass
 
             try:
-                if self.main_window and getattr(self.main_window, "sidecar", None):
-                    self.main_window.sidecar.hide()
+                self.main_window.attach_agent_preview_source(None)
             except Exception:
                 pass
         except Exception:
@@ -493,6 +486,7 @@ class MainController(QObject):
     @Slot(object)
     def handle_mode_changed(self, mode):
         self.gui_adapter.current_mode = mode
+        self.gui_adapter.set_operation_mode(mode)
         if not self.agent:
             return
         try:
@@ -521,11 +515,8 @@ class MainController(QObject):
         except Exception:
             pass
 
-        try:
-            if self.main_window and hasattr(self.main_window, "chat_widget"):
-                self.main_window.chat_widget.set_workspace_status(workspace)
-        except Exception:
-            pass
+        self.gui_adapter.set_workspace(workspace)
+        self.gui_adapter.set_agent_view_enabled(workspace == "agent")
 
         if self.live_session:
             try:
@@ -540,6 +531,7 @@ class MainController(QObject):
     def handle_vision_changed(self, vision_mode: str):
         mode_key = (vision_mode or "").strip().lower()
         self._apply_vision_flags(mode_key)
+        self.gui_adapter.set_vision_mode("ROBO" if mode_key == "robo" else "OCR")
 
         if not self.agent:
             return
@@ -547,69 +539,50 @@ class MainController(QObject):
         if mode_key == "robo":
             try:
                 self.agent.robotics_eye = self._create_robotics_eye()
+                self.gui_adapter.set_vision_mode("ROBO")
                 self.gui_adapter.add_system_message("Vision changed to ROBO")
             except Exception as exc:
                 Config.USE_ROBOTICS_EYE = False
                 Config.LAZY_VISION = True
                 self.agent.robotics_eye = None
-                try:
-                    self.main_window.chat_widget.set_vision_mode("OCR")
-                except Exception:
-                    pass
+                self.gui_adapter.set_vision_mode("OCR")
                 self.gui_adapter.add_error_message(
                     f"Failed to enable ROBO vision (using OCR): {exc}"
                 )
         else:
             self.agent.robotics_eye = None
+            self.gui_adapter.set_vision_mode("OCR")
             self.gui_adapter.add_system_message("Vision changed to OCR")
 
     def update_sidecar_visibility(self):
-        if not self.main_window or not hasattr(self.main_window, "chat_widget"):
-            return
-
         workspace = "user"
         if self.agent:
             workspace = (self.agent.active_workspace or "user").strip().lower()
         is_agent_workspace = workspace == "agent"
 
-        try:
-            self.main_window.chat_widget.set_agent_view_enabled(is_agent_workspace)
-        except Exception:
-            pass
+        self.gui_adapter.set_agent_view_enabled(is_agent_workspace)
 
         if not is_agent_workspace:
-            if getattr(self.main_window, "sidecar", None):
-                self.main_window.sidecar.hide()
+            self.main_window.attach_agent_preview_source(None)
+            self.gui_adapter.set_sidecar_visible(False)
             return
 
         if not self.desktop_manager or not getattr(self.desktop_manager, "is_created", False):
             self.init_sidecar()
 
-        try:
-            source = (
-                self.desktop_manager
-                if self.desktop_manager and getattr(self.desktop_manager, "is_created", False)
-                else None
-            )
-            sidecar = self.main_window.ensure_sidecar()
-            if source:
-                sidecar.set_capture_source(source)
-
-            should_show = bool(
-                source and self.main_window.chat_widget.should_show_agent_view()
-            )
-            if should_show:
-                sidecar.show()
-                sidecar.reattach()
-            else:
-                sidecar.hide()
-        except Exception:
-            pass
+        source = (
+            self.desktop_manager
+            if self.desktop_manager and getattr(self.desktop_manager, "is_created", False)
+            else None
+        )
+        self.main_window.attach_agent_preview_source(source)
+        self.main_window.refresh_agent_preview_visibility()
 
     @Slot(bool)
     def handle_live_mode_changed(self, enabled: bool):
         if not self.live_session:
             self.live_mode_enabled = False
+            self.gui_adapter.set_live_enabled(False)
             self.gui_adapter.add_error_message(self._startup_message("Gemini Live", unavailable=True))
             return
 
@@ -624,11 +597,7 @@ class MainController(QObject):
             except Exception:
                 pass
 
-        try:
-            if self.main_window and hasattr(self.main_window, "chat_widget"):
-                self.main_window.chat_widget.set_live_enabled(self.live_mode_enabled)
-        except Exception:
-            pass
+        self.gui_adapter.set_live_enabled(self.live_mode_enabled)
         self._apply_click_through_policy()
 
     @Slot(bool)
@@ -638,9 +607,6 @@ class MainController(QObject):
 
         if enabled:
             if not self.live_session.start_voice():
-                self.gui_adapter.add_error_message(
-                    "Failed to start Gemini Live voice session."
-                )
                 self._handle_live_voice_active(False)
         else:
             self.live_session.stop_voice()
@@ -683,11 +649,6 @@ class MainController(QObject):
             self.live_mode_enabled = False
             self._live_action_passthrough_active = False
         self.gui_adapter.update_live_availability(available, reason)
-        try:
-            if self.main_window and hasattr(self.main_window, "chat_widget"):
-                self.main_window.chat_widget.set_live_availability(available, reason)
-        except Exception:
-            pass
         self._apply_click_through_policy()
 
     @Slot(bool)

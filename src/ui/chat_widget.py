@@ -21,13 +21,14 @@ from PySide6.QtSvgWidgets import QSvgWidget
 
 from .animated_mic_button import AnimatedMicButton
 from .animated_live_button import AnimatedLiveButton
+from .glass import BackdropController, GlassButton, GlassComboBox, GlassFrame
 from .workspace_badge_button import WorkspaceBadgeButton
 from .sidecar_preview import EmbeddedAgentPreview
 from config import OperationMode, Config
 
 
 LIVE_IDLE_INPUT_PROMPT = "Type or speak to Gemini Live..."
-LIVE_VOICE_INPUT_PROMPT = "Live voice active..."
+LIVE_VOICE_INPUT_PROMPT = "Type or speak while mic is active..."
 AI_OFF_INPUT_PROMPT = "Turn AI on to chat with Pixie..."
 DETAILS_COLLAPSED_ICON = "\u25A2"
 DETAILS_EXPANDED_ICON = "\u2750"
@@ -53,6 +54,8 @@ class ChatWidget(QWidget):
         self._agent_resizing = False
         self._agent_resize_start_x = 0
         self._agent_resize_start_width = self._agent_panel_width
+        self._backdrop_controller: BackdropController | None = None
+        self._glass_widgets: list[QWidget] = []
 
         self.setup_ui()
         self.apply_styles()
@@ -107,6 +110,18 @@ class ChatWidget(QWidget):
         self.set_live_availability(Config.LIVE_MODE_AVAILABLE, "")
         self.set_live_enabled(False)
         self.set_live_session_state("disconnected")
+
+    def _register_glass_widget(self, widget: QWidget) -> QWidget:
+        self._glass_widgets.append(widget)
+        return widget
+
+    def attach_backdrop_controller(self, controller: BackdropController | None) -> None:
+        self._backdrop_controller = controller
+        for widget in self._glass_widgets:
+            setter = getattr(widget, "set_backdrop_controller", None)
+            if callable(setter):
+                setter(controller)
+        self.update()
 
     def set_operation_mode(self, mode: OperationMode):
         """Update dropdown without re-triggering mode change logic."""
@@ -216,6 +231,17 @@ class ChatWidget(QWidget):
         self._refresh_mic_visual_state()
         self._apply_view_mode()
 
+    def ensure_notch_voice_mode(self) -> None:
+        if not self._live_available:
+            return
+        if not self._live_enabled:
+            self.live_mode_changed.emit(True)
+            self.set_live_enabled(True)
+        if not self._live_voice_active:
+            self.live_voice_toggled.emit(True)
+            self.set_live_voice_active(True)
+        self._apply_view_mode()
+
     def _live_button_presentation(self) -> tuple[str, str]:
         if not self._live_available:
             return ("disabled", self.live_btn.toolTip() or "Gemini Live unavailable")
@@ -271,6 +297,8 @@ class ChatWidget(QWidget):
         self.live_mode_changed.emit(self._live_enabled)
         self._refresh_live_controls()
         self._apply_view_mode()
+        if self._live_enabled:
+            self._focus_input_field()
 
     def _sync_ai_controls(self) -> None:
         typing_enabled = bool(self._live_enabled and self._live_available)
@@ -287,6 +315,14 @@ class ChatWidget(QWidget):
         self.send_btn.setEnabled(typing_enabled)
         self.mic_btn.setEnabled(typing_enabled)
         self.compact_stop_btn.setEnabled(bool(typing_enabled and self._live_voice_active))
+
+    def _focus_input_field(self) -> None:
+        if (
+            self.input_field.isVisible()
+            and self.input_field.isEnabled()
+            and not self.input_field.isReadOnly()
+        ):
+            self.input_field.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def set_workspace_status(self, workspace: str):
         key = (workspace or "").strip().lower()
@@ -312,6 +348,15 @@ class ChatWidget(QWidget):
         self._apply_view_mode()
         if was_enabled != self._agent_view_enabled or was_requested != self._agent_view_requested:
             self.agent_view_visibility_changed.emit()
+
+    def set_agent_view_requested(self, requested: bool) -> None:
+        requested = bool(requested and self._agent_view_enabled)
+        if self._agent_view_requested == requested:
+            return
+        self._agent_view_requested = requested
+        self._refresh_workspace_badge(show_agent=self.should_show_agent_view())
+        self._apply_view_mode()
+        self.agent_view_visibility_changed.emit()
 
     def set_agent_preview_source(self, desktop_manager_or_none):
         self._agent_preview_source = desktop_manager_or_none
@@ -463,32 +508,32 @@ class ChatWidget(QWidget):
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(0)
 
-        self.extended_panel = QFrame()
+        self.extended_panel = self._register_glass_widget(GlassFrame(role="shell", radius=16.0))
         self.extended_panel.setObjectName("extendedPanel")
         ep = QVBoxLayout(self.extended_panel)
         ep.setContentsMargins(10, 10, 10, 10)
         ep.setSpacing(8)
 
-        self.mode_combo = QComboBox()
+        self.mode_combo = self._register_glass_widget(GlassComboBox(role="control", radius=8.0))
         self.mode_combo.addItems(["GUIDANCE", "SAFE", "AUTO"])
         self.mode_combo.setObjectName("modeCombo")
         self.mode_combo.setItemData(0, "Live read-only guidance. Pixie tutors but does not act.", Qt.ItemDataRole.ToolTipRole)
         self.mode_combo.setItemData(1, "Live autonomous mode with confirmation before each desktop action.", Qt.ItemDataRole.ToolTipRole)
         self.mode_combo.setItemData(2, "Live autonomous mode with no per-action confirmations.", Qt.ItemDataRole.ToolTipRole)
 
-        self.vision_combo = QComboBox()
+        self.vision_combo = self._register_glass_widget(GlassComboBox(role="control", radius=8.0))
         self.vision_combo.addItems(["ROBO", "OCR"])
         self.vision_combo.setObjectName("visionCombo")
         self.vision_combo.setItemData(0, "Robotics vision (Gemini Robotics-ER).", Qt.ItemDataRole.ToolTipRole)
         self.vision_combo.setItemData(1, "OCR + CV.", Qt.ItemDataRole.ToolTipRole)
 
-        self.workspace_badge = WorkspaceBadgeButton()
+        self.workspace_badge = self._register_glass_widget(WorkspaceBadgeButton())
         self.workspace_badge.setObjectName("workspaceBadge")
         self.workspace_badge.setToolTip("Current workspace")
         self.workspace_badge.setCursor(Qt.CursorShape.ArrowCursor)
         self.workspace_badge.setFixedSize(40, 32)
 
-        self.live_btn = AnimatedLiveButton()
+        self.live_btn = self._register_glass_widget(AnimatedLiveButton())
         self.live_btn.setObjectName("liveToggleBtn")
         self.live_btn.setCheckable(True)
         self.live_btn.setToolTip("Turn AI on")
@@ -504,15 +549,21 @@ class ChatWidget(QWidget):
         self.logout_btn.setCursor(Qt.PointingHandCursor)
         self.logout_btn.setToolTip("Sign out and switch accounts")
 
-        self.process_panel = QFrame()
+        self.process_panel = self._register_glass_widget(GlassFrame(role="content", radius=14.0))
         self.process_panel.setObjectName("processPanel")
         pp = QVBoxLayout(self.process_panel)
-        pp.setContentsMargins(0, 0, 0, 0)
+        pp.setContentsMargins(10, 10, 10, 10)
         pp.setSpacing(6)
 
         self.process_title = QLabel("Process Details")
         self.process_title.setObjectName("sectionTitle")
         pp.addWidget(self.process_title)
+
+        self.chat_display_shell = self._register_glass_widget(GlassFrame(role="content", radius=12.0))
+        self.chat_display_shell.setObjectName("chatDisplayShell")
+        chat_shell_layout = QVBoxLayout(self.chat_display_shell)
+        chat_shell_layout.setContentsMargins(2, 2, 2, 2)
+        chat_shell_layout.setSpacing(0)
 
         self.chat_display = QTextBrowser()
         self.chat_display.setObjectName("chatDisplay")
@@ -521,13 +572,17 @@ class ChatWidget(QWidget):
         self.chat_display.setOpenLinks(False)
         self.chat_display.anchorClicked.connect(self._on_anchor_clicked)
         self.chat_display.setPlaceholderText("Ask anything to Pixie.")
-        pp.addWidget(self.chat_display)
+        self.chat_display.setFrameShape(QFrame.Shape.NoFrame)
+        self.chat_display.viewport().setAutoFillBackground(False)
+        chat_shell_layout.addWidget(self.chat_display)
+        pp.addWidget(self.chat_display_shell, 1)
 
-        self.compact_stop_btn = QPushButton("Stop")
+        self.compact_stop_btn = self._register_glass_widget(GlassButton("Stop", role="control", radius=8.0))
         self.compact_stop_btn.setObjectName("compactStopBtn")
         self.compact_stop_btn.setFixedHeight(28)
         self.compact_stop_btn.setVisible(False)
         self.compact_stop_btn.setToolTip("Stop live voice session")
+        self.compact_stop_btn.set_tone("warm")
         self.compact_stop_btn.clicked.connect(self._stop_voice_session)
         pp.addWidget(self.compact_stop_btn)
 
@@ -564,7 +619,7 @@ class ChatWidget(QWidget):
 
         self.extended_panel.setMinimumWidth(360)
 
-        self.top_bar = QFrame()
+        self.top_bar = self._register_glass_widget(GlassFrame(role="shell", radius=22.0))
         self.top_bar.setObjectName("topBar")
         self.top_bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         h = QHBoxLayout(self.top_bar)
@@ -576,7 +631,7 @@ class ChatWidget(QWidget):
         self.logo.setObjectName("logo")
         self.logo.setFixedSize(32, 32)
 
-        self.input_shell = QFrame()
+        self.input_shell = self._register_glass_widget(GlassFrame(role="content", radius=14.0))
         self.input_shell.setObjectName("barInput")
         i = QHBoxLayout(self.input_shell)
         i.setContentsMargins(10, 4, 10, 4)
@@ -586,12 +641,12 @@ class ChatWidget(QWidget):
         self.input_field.setObjectName("inputField")
         self.input_field.setPlaceholderText(AI_OFF_INPUT_PROMPT)
 
-        self.mic_btn = AnimatedMicButton()
+        self.mic_btn = self._register_glass_widget(AnimatedMicButton())
         self.mic_btn.setObjectName("micBtn")
         self.mic_btn.setFixedSize(40, 30)
         self.mic_btn.setToolTip("Turn AI on to start voice")
 
-        self.send_btn = QPushButton("Go")
+        self.send_btn = self._register_glass_widget(GlassButton("Go", role="control", radius=10.0))
         self.send_btn.setObjectName("sendBtn")
         self.send_btn.setFixedSize(38, 30)
 
@@ -599,24 +654,25 @@ class ChatWidget(QWidget):
         i.addWidget(self.mic_btn)
         i.addWidget(self.send_btn)
 
-        self.expand_btn = QPushButton(DETAILS_COLLAPSED_ICON)
+        self.expand_btn = self._register_glass_widget(GlassButton(DETAILS_COLLAPSED_ICON, role="control", radius=10.0))
         self.expand_btn.setObjectName("expandBtn")
         self.expand_btn.setFixedHeight(32)
         self.expand_btn.setToolTip("Show process details")
 
-        self.settings_btn = QPushButton(SETTINGS_ICON)
+        self.settings_btn = self._register_glass_widget(GlassButton(SETTINGS_ICON, role="control", radius=10.0))
         self.settings_btn.setObjectName("settingsBtn")
         self.settings_btn.setFixedSize(40, 32)
         self.settings_btn.setToolTip("Mode, vision, and account settings")
 
-        self.minimize_btn = QPushButton(MINIMIZE_ICON)
+        self.minimize_btn = self._register_glass_widget(GlassButton(MINIMIZE_ICON, role="control", radius=10.0))
         self.minimize_btn.setObjectName("minimizeBtn")
         self.minimize_btn.setFixedHeight(32)
         self.minimize_btn.setToolTip("Hide to background")
 
-        self.close_btn = QPushButton("X")
+        self.close_btn = self._register_glass_widget(GlassButton("X", role="control", radius=10.0))
         self.close_btn.setObjectName("closeBtn")
         self.close_btn.setFixedHeight(32)
+        self.close_btn.set_tone("danger")
 
         h.addWidget(self.logo)
         h.addWidget(self.input_shell, 1)
@@ -643,15 +699,9 @@ class ChatWidget(QWidget):
         self.setStyleSheet("""
             QToolTip { background: #111827; color: #f9fafb; border: 1px solid #1f2937; padding: 6px 10px; font: 11px 'Segoe UI', sans-serif; }
             ChatWidget { background: transparent; font-family: 'Segoe UI', sans-serif; }
-            QFrame#topBar {
-                background: #f8fafc;
-                border: 1px solid #d3dce8;
-                border-radius: 22px;
-            }
-            QFrame#barInput {
-                background: #ffffff;
-                border: 1px solid #cfd8e3;
-                border-radius: 14px;
+            QFrame#topBar, QFrame#barInput, QFrame#extendedPanel, QFrame#processPanel, QFrame#chatDisplayShell {
+                background: transparent;
+                border: none;
             }
             QLineEdit#inputField {
                 background: transparent;
@@ -659,40 +709,22 @@ class ChatWidget(QWidget):
                 color: #1f2937;
                 font: 15px 'Segoe UI', sans-serif;
             }
-            QPushButton#sendBtn {
-                background: #eef2f7;
-                border: 1px solid #d5dce7;
-                border-radius: 10px;
+            QPushButton#sendBtn, QPushButton#expandBtn, QPushButton#settingsBtn, QPushButton#minimizeBtn, QPushButton#closeBtn, QPushButton#compactStopBtn {
+                background: transparent;
+                border: none;
                 color: #334155;
+            }
+            QPushButton#sendBtn {
                 font: 600 11px 'Segoe UI', sans-serif;
             }
-            QPushButton#sendBtn:hover { background: #e2e8f0; border-color: #bcc7d6; }
             AnimatedMicButton#micBtn { background: transparent; border: none; }
             QPushButton#expandBtn, QPushButton#settingsBtn, QPushButton#minimizeBtn, QPushButton#closeBtn {
-                background: #ffffff;
-                border: 1px solid #d2dae5;
-                border-radius: 10px;
-                color: #273345;
                 font: 600 12px 'Segoe UI', sans-serif;
                 padding: 0 10px;
-            }
-            QPushButton#expandBtn:hover, QPushButton#settingsBtn:hover, QPushButton#minimizeBtn:hover {
-                background: #f1f5f9;
-                border-color: #bfcbdc;
             }
             QPushButton#settingsBtn {
                 font: 700 16px 'Segoe UI Symbol', 'Segoe UI', sans-serif;
                 padding: 0;
-            }
-            QPushButton#closeBtn:hover {
-                background: #fee2e2;
-                color: #7f1d1d;
-                border-color: #fecaca;
-            }
-            QFrame#extendedPanel {
-                background: #f8fafc;
-                border: 1px solid #d3dce8;
-                border-radius: 16px;
             }
             QFrame#agentResizeHandle {
                 background: #d2dae5;
@@ -702,10 +734,9 @@ class ChatWidget(QWidget):
                 background: #94a3b8;
             }
             QComboBox#modeCombo, QComboBox#visionCombo {
-                background: #ffffff;
+                background: transparent;
                 color: #1f2937;
-                border: 1px solid #cfd8e3;
-                border-radius: 8px;
+                border: none;
                 padding: 5px 10px;
                 font: 600 12px 'Segoe UI', sans-serif;
                 min-width: 88px;
@@ -713,6 +744,14 @@ class ChatWidget(QWidget):
             QComboBox#visionCombo { min-width: 64px; }
             QComboBox#modeCombo::drop-down, QComboBox#visionCombo::drop-down { border: none; width: 14px; }
             QComboBox#modeCombo::down-arrow, QComboBox#visionCombo::down-arrow { image: none; }
+            QAbstractItemView {
+                background: #f8fafc;
+                color: #1f2937;
+                border: 1px solid #d3dce8;
+                selection-background-color: #e2e8f0;
+                selection-color: #1f2937;
+                outline: none;
+            }
             WorkspaceBadgeButton#workspaceBadge { background: transparent; border: none; }
             AnimatedLiveButton#liveToggleBtn { background: transparent; border: none; }
             QLabel#liveStateBadge {
@@ -757,21 +796,17 @@ class ChatWidget(QWidget):
                 font: 700 12px 'Segoe UI', sans-serif;
                 padding-left: 2px;
             }
-            QTextEdit#chatDisplay {
-                background: #ffffff;
+            QTextBrowser#chatDisplay {
+                background: transparent;
                 color: #1f2937;
-                border: 1px solid #d9e2ec;
-                border-radius: 10px;
+                border: none;
                 font: 14px 'Segoe UI', sans-serif;
                 padding: 10px;
             }
             QLineEdit#inputField::placeholder { color: #64748b; }
             QLabel#inputHint { color: #64748b; font: 12px 'Segoe UI', sans-serif; padding: 2px 2px; }
             QPushButton#compactStopBtn {
-                background: #fff7ed;
                 color: #9a3412;
-                border: 1px solid #fed7aa;
-                border-radius: 8px;
                 font: 700 11px 'Segoe UI', sans-serif;
                 padding: 5px 10px;
             }
@@ -1264,6 +1299,7 @@ class ChatWidget(QWidget):
             self.input_field.clear()
             self._refresh_input_placeholder()
             self.send_to_agent(text)
+            self._focus_input_field()
 
     def _append_message(self, *, kind: str, text: str):
         self._append_to_model(kind=kind, text=text)
@@ -1455,6 +1491,7 @@ class ChatWidget(QWidget):
         self.live_voice_toggled.emit(target)
         self.set_live_voice_active(target)
         self._apply_view_mode()
+        self._focus_input_field()
 
     def on_live_audio_level(self, level: float):
         self._user_audio_level = max(0.0, float(level or 0.0))
@@ -1723,12 +1760,16 @@ class ChatWidget(QWidget):
 
         if not expanded:
             self.compact_stop_btn.hide()
+            if self._backdrop_controller is not None:
+                self._backdrop_controller.trigger_burst()
             return
 
         if listening:
             self.chat_display.show()
             self.input_hint.hide()
             self.compact_stop_btn.show()
+            if self._backdrop_controller is not None:
+                self._backdrop_controller.trigger_burst()
             return
 
         self.chat_display.show()
@@ -1737,6 +1778,8 @@ class ChatWidget(QWidget):
         else:
             self.input_hint.show()
         self.compact_stop_btn.hide()
+        if self._backdrop_controller is not None:
+            self._backdrop_controller.trigger_burst()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
