@@ -883,13 +883,46 @@ class LiveSessionManager(QObject):
     def notify_workspace_changed(self, workspace: str) -> None:
         self._workspace = (workspace or "user").strip().lower() or "user"
 
+    def _clear_session_context(self, *, reason: str = "") -> None:
+        try:
+            self.broker.cancel_current_action(reason or "Starting a fresh live session.")
+        except Exception:
+            pass
+        self._resume_handle = None
+        self._resume_pending_user_buffer = ""
+        self._resume_pending_assistant_buffer = ""
+        self._user_buffer = ""
+        self._assistant_buffer = ""
+        self._current_goal = ""
+        self._recent_user_steering.clear()
+        self._recent_action_updates.clear()
+        self._pending_capture_paths.clear()
+        self._clear_speaker_queue()
+        self._cancel_typed_turn_idle_finish_timer()
+        self._clear_pending_text_nudge()
+        self._soft_interrupt_requested = False
+        self._finish_text_turn(error=reason)
+
+    async def _restart_session_fresh(self) -> None:
+        if self._shutdown_event.is_set():
+            return
+        if self._reconnect_in_progress:
+            return
+        self._reconnect_in_progress = True
+        try:
+            await self._disconnect_session(reconnecting=True)
+            if self.enabled and not self._shutdown_event.is_set():
+                await self._ensure_session()
+        finally:
+            self._reconnect_in_progress = False
+
     def notify_mode_changed(self, mode: object) -> None:
         self._mode = mode
         self.tools.set_guidance_mode(self._is_guidance_mode())
-        if self.enabled and self._transport is not None:
-            # Force a fresh persona/system prompt when the runtime mode changes.
-            self._resume_handle = None
-            self._submit_async(self._reconnect_with_resume(), ensure_loop=False)
+        self._clear_session_context(reason="Mode changed. Started a fresh live session.")
+        self._reset_reasoning_escalation_state()
+        if self.enabled:
+            self._submit_async(self._restart_session_fresh(), ensure_loop=False)
 
     def shutdown(self) -> None:
         self._shutdown_event.set()
@@ -1638,6 +1671,8 @@ class LiveSessionManager(QObject):
         reconnect_prompt = self._build_reconnect_prompt(
             user_text=fragments["user"],
             assistant_text=fragments["assistant"],
+            goal=self._current_goal,
+            recent_action_summary=self._latest_reconnect_action_summary(self._recent_action_updates),
         )
         try:
             await self._disconnect_session(reconnecting=True)
@@ -1812,21 +1847,58 @@ class LiveSessionManager(QObject):
         return fragments
 
     @staticmethod
-    def _build_reconnect_prompt(*, user_text: str, assistant_text: str) -> str:
+    def _latest_reconnect_action_summary(recent_action_updates: list[dict[str, Any]] | deque[dict[str, Any]]) -> str:
+        for payload in reversed(list(recent_action_updates or [])):
+            if not isinstance(payload, dict):
+                continue
+            message = str(payload.get("message") or "").strip()
+            name = str(payload.get("name") or "").strip()
+            status = str(payload.get("status") or "").strip().lower()
+            if message:
+                return message
+            if name and status:
+                return f"{name} ({status})"
+            if name:
+                return name
+            if status:
+                return status
+        return ""
+
+    @staticmethod
+    def _build_reconnect_prompt(
+        *,
+        user_text: str,
+        assistant_text: str,
+        goal: str = "",
+        recent_action_summary: str = "",
+    ) -> str:
         user_fragment = str(user_text or "").strip()
         assistant_fragment = str(assistant_text or "").strip()
+        goal_text = str(goal or "").strip()
+        action_text = str(recent_action_summary or "").strip()
+        continuity_parts = []
+        if goal_text:
+            continuity_parts.append(f"Active goal: {json.dumps(goal_text, ensure_ascii=True)}")
+        if action_text:
+            continuity_parts.append(f"Latest action state: {json.dumps(action_text, ensure_ascii=True)}")
+        continuity_suffix = f" {' '.join(continuity_parts)}" if continuity_parts else ""
         if assistant_fragment:
             return (
                 "Connection resumed in the middle of your reply. Continue the interrupted answer naturally "
-                "from the current context instead of starting over. "
+                f"from the current context instead of starting over.{continuity_suffix} "
                 f"Latest assistant transcript: {json.dumps(assistant_fragment, ensure_ascii=True)}"
             )
         if user_fragment:
             return (
                 "Connection resumed while the user was speaking. Use this partial user transcript for "
                 "continuity. If the request already seems complete, continue helping. If it seems cut off, "
-                "ask the user to finish the sentence briefly. "
+                f"ask the user to finish the sentence briefly.{continuity_suffix} "
                 f"Partial user transcript: {json.dumps(user_fragment, ensure_ascii=True)}"
+            )
+        if continuity_suffix:
+            return (
+                "Connection resumed during the active task. Continue from the current context instead of starting over."
+                f"{continuity_suffix}"
             )
         return ""
 

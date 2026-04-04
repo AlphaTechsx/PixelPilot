@@ -20,7 +20,7 @@ class GuiFormatter(logging.Formatter):
 
 
 class BufferingGuiHandler(logging.Handler):
-    """Buffers formatted GUI log lines until a GuiAdapter is available."""
+    """Buffers formatted shell log lines until a runtime adapter is available."""
 
     def __init__(self, level: int = logging.INFO):
         super().__init__(level=level)

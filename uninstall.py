@@ -85,6 +85,8 @@ def _kill_processes() -> None:
         "orchestrator.exe",
         "agent.exe",
         "pixelpilot.exe",
+        "electron.exe",
+        "node.exe",
     ]:
         try:
             subprocess.run(["taskkill", "/F", "/IM", image_name], capture_output=True)
@@ -196,9 +198,12 @@ def main() -> None:
 
     if not args.keep_dist:
         _remove_dir(REPO_ROOT / "dist")
+        _remove_dir(REPO_ROOT / "desktop" / "dist")
+        _remove_dir(REPO_ROOT / "desktop" / "resources" / "runtime")
 
     if not args.keep_build:
         _remove_dir(REPO_ROOT / "build")
+        _remove_dir(REPO_ROOT / "desktop" / "node_modules")
 
     if not args.keep_logs:
         _remove_dir(REPO_ROOT / "logs")

@@ -65,17 +65,17 @@ PixelPilot is a Windows desktop AI agent that executes computer tasks from natur
 - `Ctrl+Shift+M`: Hide/restore app (background toggle)
 - `Ctrl+Shift+D`: Toggle details panel
 
-## UI Notes
+## Desktop Shell Notes
 
-- Default UI is a compact bar.
-- Details panel expands/collapses.
-- Minimize hides to tray/background; restore from tray or `Ctrl+Shift+M`.
-- Workspace badge indicates `user` vs `agent`.
-- Agent preview sidecar is available only when workspace is `agent`.
+- Desktop shell is Electron-only.
+- Python no longer renders any Qt widgets, dialogs, tray UI, or QML surfaces.
+- Main states are compact overlay, expanded details, minimized notch, and agent sidecar.
+- Minimize hides to background/notch; restore with tray or `Ctrl+Shift+M`.
 
 ## Tech Stack
 
-- Desktop app: Python + PySide6
+- Desktop shell: Electron + React + TypeScript + Tailwind
+- Runtime/backend process: Python + PySide6 Core (headless event loop only)
 - AI: Google GenAI SDK (`google-genai`)
 - Vision: EasyOCR, OpenCV, Pillow
 - Automation: pyautogui, ctypes/Win32, keyboard, UIAutomation (`uiautomation`)
@@ -96,6 +96,8 @@ Installer does:
 - installs `requirements.txt`
 - prefetches EasyOCR models
 - prebuilds app index cache
+- compiles packaged desktop runtime (`pixelpilot-runtime.exe`)
+- installs/builds the desktop shell in `desktop/`
 - compiles UAC helpers (`src/uac/orchestrator.py`, `src/uac/agent.py`)
 - creates scheduled tasks:
   - `PixelPilotUACOrchestrator` (SYSTEM startup task)
@@ -163,15 +165,34 @@ Notes:
 ## Run
 
 ```bash
-.\venv\Scripts\python.exe .\src\main.py
+cd desktop
+npm install
+npm run build
+npm start
 ```
 
 Startup behavior:
-- Direct mode (`GEMINI_API_KEY` present): no login dialog.
+- Direct mode (`GEMINI_API_KEY` present): Electron opens straight into the shell without a login gate.
 - When Live is available, AI power and live voice are enabled by default at startup.
-- Backend mode (no local key): login dialog appears, Gemini Live uses the backend Gemini key after sign-in, and OCR mode runs the full eye pipeline on the backend.
-- Login dialog also lets user paste/store an API key.
-- The desktop UI stays least-privileged at startup; secure desktop/UAC automation uses the installed helper tasks when needed.
+- Backend mode (no local key): Electron shows the auth gate, Gemini Live uses the backend Gemini key after sign-in, and OCR mode runs the full eye pipeline on the backend.
+- The desktop shell stays least-privileged at startup; secure desktop/UAC automation uses the installed helper tasks when needed.
+
+Python launcher helper:
+
+```bash
+.\venv\Scripts\python.exe .\src\main.py
+```
+
+That launcher now starts the Electron shell. It does not open any legacy Python UI.
+
+Windows package build:
+
+```bash
+cd desktop
+npm run package:win
+```
+
+That package flow first builds `pixelpilot-runtime.exe`, then stages it into the Electron app resources before running `electron-builder`.
 
 ### Testing Credentials
 

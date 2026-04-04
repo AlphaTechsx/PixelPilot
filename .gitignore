@@ -15,3 +15,6 @@ uac_trigger.txt
 logs/
 tests/
 .easyocr
+/desktop/dist/
+/desktop/node_modules/
+/desktop/resources/runtime/

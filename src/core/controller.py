@@ -2,21 +2,19 @@ import logging
 import threading
 import time
 
-from PySide6.QtCore import QCoreApplication, QObject, QTimer, Slot
-from PySide6.QtWidgets import QDialog
+from PySide6.QtCore import QObject, QTimer, Slot
 
 from config import Config, OperationMode
-from ui.custom_dialogs import ConfirmationDialog
 
 logger = logging.getLogger("pixelpilot.controller")
 startup_logger = logging.getLogger("pixelpilot.startup")
 
 
 class MainController(QObject):
-    def __init__(self, gui_adapter, main_window, *, startup_started_at: float | None = None):
+    def __init__(self, gui_adapter, shell, *, startup_started_at: float | None = None):
         super().__init__()
         self.gui_adapter = gui_adapter
-        self.main_window = main_window
+        self.shell = shell
         self.agent = None
         self.live_session = None
         self.live_mode_enabled = False
@@ -34,10 +32,6 @@ class MainController(QObject):
         if getattr(self.gui_adapter, "current_mode", None) is None:
             self.gui_adapter.current_mode = Config.DEFAULT_MODE
 
-        self.gui_adapter.confirmation_requested.connect(self.handle_confirmation)
-        self.gui_adapter.screenshot_prep_requested.connect(self.handle_screenshot_prep)
-        self.gui_adapter.screenshot_restore_requested.connect(self.handle_screenshot_restore)
-        self.gui_adapter.click_through_requested.connect(self.handle_click_through)
         self.gui_adapter.workspace_changed.connect(self.handle_workspace_changed)
 
     def mark_startup_phase(self, phase: str, *, status: str = "ok", detail: str = "") -> None:
@@ -117,7 +111,7 @@ class MainController(QObject):
             and self._live_action_passthrough_active
         )
         try:
-            self.main_window.set_click_through_enabled(click_through)
+            self.shell.set_click_through_enabled(click_through)
             self.gui_adapter.set_click_through_enabled(click_through)
         except Exception:
             pass
@@ -349,19 +343,19 @@ class MainController(QObject):
             from desktop.desktop_manager import AgentDesktopManager
 
             if self.desktop_manager and getattr(self.desktop_manager, "is_created", False):
-                self.main_window.attach_agent_preview_source(self.desktop_manager)
+                self.shell.attach_agent_preview_source(self.desktop_manager)
                 return
 
             self.desktop_manager = AgentDesktopManager(Config.AGENT_DESKTOP_NAME)
             if not self.desktop_manager.create_desktop():
                 logger.warning("Failed to create Agent Desktop")
                 self.desktop_manager = None
-                self.main_window.attach_agent_preview_source(None)
+                self.shell.attach_agent_preview_source(None)
                 return
 
             self.desktop_manager.initialize_shell()
 
-            self.main_window.attach_agent_preview_source(self.desktop_manager)
+            self.shell.attach_agent_preview_source(self.desktop_manager)
 
             if self.agent:
                 self.agent.desktop_manager = self.desktop_manager
@@ -373,60 +367,34 @@ class MainController(QObject):
         except Exception as exc:
             logger.exception("Failed to initialize Agent Desktop: %s", exc)
             self.desktop_manager = None
-            self.main_window.attach_agent_preview_source(None)
-
-    @Slot(str, str, object)
-    def handle_confirmation(self, title, text, payload):
-        dialog = ConfirmationDialog(self.main_window.dialog_parent(), title, text)
-        payload["result"] = dialog.exec() == QDialog.DialogCode.Accepted
-        payload["event"].set()
-
-    @Slot(object)
-    def handle_screenshot_prep(self, payload):
-        state = self.main_window.prepare_for_screenshot()
-        payload.update(state)
-        QCoreApplication.processEvents()
-        payload["event"].set()
-
-    @Slot(object)
-    def handle_screenshot_restore(self, payload):
-        self.main_window.restore_after_screenshot(payload)
-        payload["event"].set()
-
-    @Slot(bool, object)
-    def handle_click_through(self, enable, payload):
-        try:
-            self.main_window.set_click_through_enabled(bool(enable))
-            self.gui_adapter.set_click_through_enabled(bool(enable))
-        except Exception:
-            pass
-        payload["event"].set()
+            self.shell.attach_agent_preview_source(None)
 
     def handle_user_command(self, text):
         clean = str(text or "").strip()
         if not clean:
-            return
+            return {"ok": False, "message": "Empty input."}
         if not self.agent:
             self.gui_adapter.add_error_message(self._startup_message("AI"))
-            return
+            return {"ok": False, "message": self._startup_message("AI")}
         if not self.live_session:
             self.gui_adapter.add_error_message(self._startup_message("Gemini Live"))
-            return
+            return {"ok": False, "message": self._startup_message("Gemini Live")}
         if not self.live_mode_enabled or not self.live_session.enabled:
             self.gui_adapter.add_error_message("AI is off. Turn AI on to send instructions.")
-            return
+            return {"ok": False, "message": "AI is off. Turn AI on to send instructions."}
         result = self.live_session.submit_text(clean)
         if not isinstance(result, dict):
-            return
+            return {"ok": False, "message": "Live runtime did not return a result."}
         if not bool(result.get("ok", False)):
             message = str(result.get("message") or "Failed to send input to Gemini Live.").strip()
             if message:
                 self.gui_adapter.add_error_message(message)
-            return
+            return result
         status = str(result.get("status") or "").strip().lower()
         message = str(result.get("message") or "").strip()
         if status in {"nudge_queued", "nudge_sent", "queued_connecting"} and message:
             self.gui_adapter.add_activity_message(message)
+        return result
 
     def stop_current_turn(self):
         if self.live_mode_enabled and self.live_session and self.live_session.enabled:
@@ -437,8 +405,8 @@ class MainController(QObject):
 
     def toggle_click_through(self):
         try:
-            current = bool(self.main_window.click_through_enabled())
-            self.main_window.set_click_through_enabled(not current)
+            current = bool(self.shell.click_through_enabled())
+            self.shell.set_click_through_enabled(not current)
             self.gui_adapter.set_click_through_enabled(not current)
         except Exception as exc:
             self.gui_adapter.add_error_message(
@@ -478,30 +446,60 @@ class MainController(QObject):
                     pass
 
             try:
-                self.main_window.attach_agent_preview_source(None)
+                self.shell.attach_agent_preview_source(None)
+            except Exception:
+                pass
+            try:
+                shutdown_shell = getattr(self.shell, "shutdown", None)
+                if callable(shutdown_shell):
+                    shutdown_shell()
             except Exception:
                 pass
         except Exception:
             pass
 
+    def refresh_live_runtime(self) -> None:
+        if not self.agent:
+            return
+        self._init_live_session()
+
+    def _clear_live_session_history(self) -> None:
+        clear_messages = getattr(self.gui_adapter, "clear_messages", None)
+        if callable(clear_messages):
+            try:
+                clear_messages()
+            except Exception:
+                pass
+
+        clear_agent_context = getattr(self.agent, "clear_session_context", None)
+        if callable(clear_agent_context):
+            try:
+                clear_agent_context()
+            except Exception:
+                pass
+
+        self._live_action_passthrough_active = False
+
     @Slot(object)
     def handle_mode_changed(self, mode):
         self.gui_adapter.current_mode = mode
-        self.gui_adapter.set_operation_mode(mode)
         if not self.agent:
+            self.gui_adapter.set_operation_mode(mode)
             return
         try:
             self.agent.set_mode(mode)
             if self.live_session:
                 self.live_session.notify_mode_changed(mode)
+            self._clear_live_session_history()
+            self.gui_adapter.set_operation_mode(mode)
             if mode == OperationMode.GUIDE and self.agent.active_workspace != "user":
                 self.agent._set_workspace(
                     "user",
                     reason="Guidance mode requires the user workspace",
                 )
-            self._live_action_passthrough_active = False
             self._apply_click_through_policy()
             self._sync_window_from_agent()
+            self.update_sidecar_visibility()
         except Exception as exc:
             self.gui_adapter.add_error_message(f"Failed to change mode: {exc}")
 
@@ -564,7 +562,7 @@ class MainController(QObject):
         self.gui_adapter.set_agent_view_enabled(is_agent_workspace)
 
         if not is_agent_workspace:
-            self.main_window.attach_agent_preview_source(None)
+            self.shell.attach_agent_preview_source(None)
             self.gui_adapter.set_sidecar_visible(False)
             return
 
@@ -576,8 +574,8 @@ class MainController(QObject):
             if self.desktop_manager and getattr(self.desktop_manager, "is_created", False)
             else None
         )
-        self.main_window.attach_agent_preview_source(source)
-        self.main_window.refresh_agent_preview_visibility()
+        self.shell.attach_agent_preview_source(source)
+        self.shell.refresh_agent_preview_visibility()
 
     @Slot(bool)
     def handle_live_mode_changed(self, enabled: bool):

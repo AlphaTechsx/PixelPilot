@@ -7,6 +7,7 @@ import winreg
 import argparse
 import venv
 import time
+import shutil
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -20,6 +21,9 @@ AGENT_EXE_NAME = "agent.exe"
 
 MAIN_APP_SCRIPT = REPO_ROOT / "src" / "main.py"
 MAIN_APP_TASK_NAME = "PixelPilotApp"
+DESKTOP_DIR = REPO_ROOT / "desktop"
+RUNTIME_ENTRY = REPO_ROOT / "src" / "runtime" / "bootstrap.py"
+RUNTIME_EXE_NAME = "pixelpilot-runtime.exe"
 
 DEFAULT_VENV_DIR = REPO_ROOT / "venv"
 DEFAULT_REQUIREMENTS = REPO_ROOT / "requirements.txt"
@@ -133,6 +137,37 @@ def prebuild_app_index(python_exe: str) -> bool:
         return True
     except subprocess.CalledProcessError as exc:
         print(f"[!] App index prebuild failed: {exc}")
+        return False
+
+
+def _find_npm() -> str | None:
+    return shutil.which("npm.cmd") or shutil.which("npm")
+
+
+def prepare_desktop_shell(python_exe: str | None = None) -> bool:
+    if not DESKTOP_DIR.exists():
+        print(f"[-] Desktop shell directory not found: {DESKTOP_DIR}")
+        return False
+
+    npm = _find_npm()
+    if not npm:
+        print("[-] npm was not found. Install Node.js to build the desktop shell.")
+        return False
+
+    try:
+        print("[*] Compiling packaged desktop runtime...")
+        runtime_exe = compile_script(RUNTIME_ENTRY, RUNTIME_EXE_NAME, python_exe=python_exe)
+        if not runtime_exe:
+            print("[-] Failed to build the packaged desktop runtime.")
+            return False
+        print("[*] Installing desktop shell dependencies...")
+        subprocess.run([npm, "install"], cwd=str(DESKTOP_DIR), check=True)
+        print("[*] Building desktop shell...")
+        subprocess.run([npm, "run", "build"], cwd=str(DESKTOP_DIR), check=True)
+        print("[+] Desktop shell is ready.")
+        return True
+    except subprocess.CalledProcessError as exc:
+        print(f"[-] Failed to prepare the desktop shell: {exc}")
         return False
 
 
@@ -275,7 +310,7 @@ def create_launcher_task(script_path: Path, python_exe: str | None = None, log_p
     launcher_vbs = REPO_ROOT / "logs" / "launch_pixelpilot.vbs"
     launcher_vbs.parent.mkdir(parents=True, exist_ok=True)
 
-    # Clean up legacy launch script if it exists
+    # Clean up any older launch script variant if it exists
     try:
         (REPO_ROOT / "logs" / "launch_pixelpilot.cmd").unlink()
     except Exception:
@@ -435,7 +470,7 @@ def create_desktop_shortcut() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Pixel Pilot Installer (merged GUI app)")
+    parser = argparse.ArgumentParser(description="Pixel Pilot Installer (desktop shell)")
     parser.add_argument("--no-venv", action="store_true", help="Do not create venv or install requirements")
     parser.add_argument("--venv-dir", default=str(DEFAULT_VENV_DIR), help="Virtualenv directory")
     parser.add_argument(
@@ -465,6 +500,9 @@ def main() -> None:
     else:
         venv_python = None
 
+    if not prepare_desktop_shell(venv_python):
+        return
+
     if args.no_tasks:
         print("[*] Skipping scheduled tasks/shortcut (requested).")
         print("=== INSTALL COMPLETE ===")
@@ -475,7 +513,7 @@ def main() -> None:
         run_as_admin()
         return
 
-    # Build UAC helper executables (legacy backend behavior)
+    # Build UAC helper executables used by secure desktop automation
     if not compile_script(AGENT_SCRIPT, AGENT_EXE_NAME, python_exe=venv_python):
         return
 

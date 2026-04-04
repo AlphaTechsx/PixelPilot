@@ -34,18 +34,12 @@ class BaseSkill:
         func = self._methods[method_name]
 
         try:
-            # check function signature to see if it accepts desktop_manager
             sig = inspect.signature(func)
             call_args = kwargs.copy()
             
             if "desktop_manager" in sig.parameters:
                 call_args["desktop_manager"] = desktop_manager
             
-            # Filter kwargs to only what signatures accept (to avoid type errors)
-            # useful if the AI hallucinates extra params? 
-            # But normally we want **kwargs to pass what was requested.
-            # However, some methods might not accept **kwargs.
-            # Let's filter to be safe.
             valid_args = {
                 k: v for k, v in call_args.items() 
                 if k in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values())

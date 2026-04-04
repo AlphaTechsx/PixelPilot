@@ -127,6 +127,13 @@ class AgentOrchestrator:
     def clear_stop_request(self) -> None:
         self._stop_event.clear()
 
+    def clear_session_context(self) -> None:
+        self.clear_stop_request()
+        self.current_task = None
+        self.current_blind_snapshot = None
+        self.deferred_reply = None
+        self.task_history.clear()
+
     def set_mode(self, mode: OperationMode) -> None:
         self.mode = mode
         self.log(f"Mode changed to {mode.value.upper()}")
