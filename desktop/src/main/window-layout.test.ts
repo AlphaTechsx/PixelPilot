@@ -57,4 +57,17 @@ describe('window-layout', () => {
       height: 212
     });
   });
+
+  it('clamps the startup settings popup within the available work area', () => {
+    const size = normalizeWindowSize(
+      'startup-settings',
+      { x: 0, y: 0, width: 300, height: 340 },
+      { width: 900, height: 999 }
+    );
+
+    expect(size).toEqual({
+      width: 260,
+      height: 292
+    });
+  });
 });

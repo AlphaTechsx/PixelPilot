@@ -4,6 +4,7 @@ import type {
   RendererConfirmationRequest,
   RuntimeEventEnvelope,
   RuntimeSnapshot,
+  StartupDefaultsSnapshot,
   SidecarFrame,
   WindowKind
 } from '../shared/types.js';
@@ -20,6 +21,8 @@ function invokeIpc<T>(channel: string, ...args: unknown[]): Promise<T> {
 const pixelPilot: PixelPilotApi = {
   getWindowKind: (): Promise<WindowKind> => ipcRenderer.invoke('pixelpilot:get-window-kind'),
   getSnapshot: (): Promise<RuntimeSnapshot | null> => ipcRenderer.invoke('pixelpilot:get-snapshot'),
+  getStartupDefaults: (): Promise<StartupDefaultsSnapshot> =>
+    invokeIpc<StartupDefaultsSnapshot>('pixelpilot:get-startup-defaults'),
   invokeRuntime: (method: string, payload?: Record<string, unknown>) =>
     invokeIpc<Record<string, unknown>>('pixelpilot:invoke-runtime', method, payload),
   setExpanded: (expanded: boolean) => invokeIpc<Record<string, unknown>>('pixelpilot:set-expanded', expanded),
@@ -28,6 +31,10 @@ const pixelPilot: PixelPilotApi = {
   setTrayOnly: (enabled: boolean) => invokeIpc<Record<string, unknown>>('pixelpilot:set-tray-only', enabled),
   toggleSettingsWindow: () => invokeIpc<{ visible: boolean }>('pixelpilot:toggle-settings-window'),
   closeSettingsWindow: () => invokeIpc<{ visible: boolean }>('pixelpilot:close-settings-window'),
+  toggleStartupSettingsWindow: () => invokeIpc<{ visible: boolean }>('pixelpilot:toggle-startup-settings-window'),
+  closeStartupSettingsWindow: () => invokeIpc<{ visible: boolean }>('pixelpilot:close-startup-settings-window'),
+  setStartupDefaults: (payload) =>
+    invokeIpc<StartupDefaultsSnapshot>('pixelpilot:set-startup-defaults', payload),
   updateWindowLayout: (payload) => invokeIpc<void>('pixelpilot:update-window-layout', payload),
   resolveConfirmation: (id: string, payload: Record<string, unknown>) =>
     invokeIpc<Record<string, unknown>>('pixelpilot:resolve-confirmation', id, payload),

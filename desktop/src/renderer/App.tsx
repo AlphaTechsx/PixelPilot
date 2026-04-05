@@ -35,6 +35,7 @@ import type {
   RendererConfirmationRequest,
   RuntimeSnapshot,
   SidecarFrame,
+  StartupDefaultsSnapshot,
   WindowKind
 } from '@shared/types.js';
 
@@ -1073,7 +1074,9 @@ function LoadingShell({ windowKind }: { windowKind: WindowKind | null }): React.
         ? 'w-[380px]'
         : windowKind === 'settings'
           ? 'w-[220px]'
-          : 'w-[560px]';
+          : windowKind === 'startup-settings'
+            ? 'w-[320px]'
+            : 'w-[560px]';
   useWindowLayout(
     windowKind === 'notch'
       ? { width: 420, height: 88 }
@@ -1081,7 +1084,9 @@ function LoadingShell({ windowKind }: { windowKind: WindowKind | null }): React.
         ? { width: 380, height: 320 }
         : windowKind === 'settings'
           ? { width: 220, height: 124 }
-        : { width: 560, height: 128 }
+          : windowKind === 'startup-settings'
+            ? { width: 320, height: 164 }
+            : { width: 560, height: 128 }
   );
   return (
     <div className="relative flex w-full items-start justify-center p-3 text-slate-900">
@@ -1104,6 +1109,157 @@ function LoadingShell({ windowKind }: { windowKind: WindowKind | null }): React.
         </GlassPanel>
       </motion.div>
     </div>
+  );
+}
+
+function startupDefaultsSourceLabel(source: StartupDefaultsSnapshot['source']): string {
+  if (source === 'persisted') {
+    return 'Using saved startup defaults';
+  }
+  if (source === 'runtime') {
+    return 'Using current runtime values';
+  }
+  return 'Using fallback defaults';
+}
+
+function StartupDefaultsShell({ snapshot }: { snapshot: RuntimeSnapshot }): React.JSX.Element {
+  const [localError, setLocalError] = useState('');
+  const [statusText, setStatusText] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [source, setSource] = useState<StartupDefaultsSnapshot['source']>('fallback');
+  const [operationMode, setOperationMode] = useState<StartupDefaultsSnapshot['operationMode']>(snapshot.operationMode);
+  const [visionMode, setVisionMode] = useState<StartupDefaultsSnapshot['visionMode']>(snapshot.visionMode);
+  const shellRef = useRef<HTMLDivElement>(null);
+
+  useMeasuredWindowLayout(
+    shellRef,
+    {
+      width: 320,
+      height: localError || statusText ? 388 : 356,
+    },
+    [localError, statusText, operationMode, visionMode]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadDefaults = async (): Promise<void> => {
+      try {
+        const result = await window.pixelPilot.getStartupDefaults();
+        if (cancelled) {
+          return;
+        }
+        setOperationMode(result.operationMode);
+        setVisionMode(result.visionMode);
+        setSource(result.source);
+        setStatusText(result.hasPersisted ? 'Saved defaults will be applied on startup.' : startupDefaultsSourceLabel(result.source));
+      } catch (error) {
+        if (!cancelled) {
+          setLocalError(error instanceof Error ? error.message : 'Unable to load startup defaults.');
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void loadDefaults();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const closeWindow = async (): Promise<void> => {
+    setLocalError('');
+    try {
+      await window.pixelPilot.closeStartupSettingsWindow();
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'Unable to close startup settings right now.');
+    }
+  };
+
+  const saveDefaults = async (): Promise<void> => {
+    if (saving) {
+      return;
+    }
+    setSaving(true);
+    setLocalError('');
+    setStatusText('Saving startup defaults...');
+    try {
+      const result = await window.pixelPilot.setStartupDefaults({ operationMode, visionMode });
+      setSource(result.source);
+      setStatusText('Startup defaults saved. They will be applied the next time PixelPilot starts.');
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'Unable to save startup defaults right now.');
+      setStatusText('');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <motion.div
+      ref={shellRef}
+      className="w-full"
+      initial={{ opacity: 0, y: -6 }}
+      animate={{ opacity: 1, y: 0 }}
+    >
+      <div className="w-full rounded-[12px] border border-[#d3dce8] bg-[#f8fafc] p-2 shadow-[0_18px_32px_rgba(15,23,42,0.18)]">
+        <div className="px-3.5 py-1.5 text-[12px] font-semibold text-slate-500">
+          Startup Defaults
+        </div>
+        {loading ? (
+          <div className="px-3.5 py-6 text-[12px] text-slate-500">Loading startup defaults...</div>
+        ) : (
+          <>
+            <div className="px-3.5 py-1 text-[11px] text-slate-500">
+              Mode on startup
+            </div>
+            {modes.map((mode) => (
+              <MenuItemButton
+                key={`startup-${mode.id}`}
+                label={mode.label}
+                active={operationMode === mode.id}
+                onClick={() => setOperationMode(mode.id)}
+              />
+            ))}
+            <div className="mx-1 my-1 h-px bg-[#e2e8f0]" />
+            <div className="px-3.5 py-1 text-[11px] text-slate-500">
+              Vision on startup
+            </div>
+            {visions.map((vision) => (
+              <MenuItemButton
+                key={`startup-vision-${vision.id}`}
+                label={vision.label}
+                active={visionMode === vision.id}
+                onClick={() => setVisionMode(vision.id)}
+              />
+            ))}
+            <div className="mx-1 my-1 h-px bg-[#e2e8f0]" />
+            <div className="px-3.5 pb-2 text-[11px] text-slate-500">
+              {statusText || startupDefaultsSourceLabel(source)}
+            </div>
+            <div className="flex items-center gap-2 px-2 pb-1">
+              <SegmentedButton label="Close" onClick={() => void closeWindow()} />
+              <button
+                type="button"
+                onClick={() => void saveDefaults()}
+                disabled={saving}
+                className="no-drag flex-1 rounded-lg bg-slate-900 px-3.5 py-2 text-left text-[13px] font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
+              >
+                {saving ? 'Saving...' : 'Save startup defaults'}
+              </button>
+            </div>
+          </>
+        )}
+        {localError && (
+          <div className="mt-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-900">
+            {localError}
+          </div>
+        )}
+      </div>
+    </motion.div>
   );
 }
 
@@ -1377,7 +1533,8 @@ function LegacyDetailsPanel({
     snapshot.operationMode,
     snapshot.visionMode,
     snapshot.workspace === 'agent' ? 'Agent desktop' : 'User desktop',
-    snapshot.liveAvailable ? humanizeState(snapshot.liveSessionState) : 'Offline'
+    snapshot.liveAvailable ? humanizeState(snapshot.liveSessionState) : 'Offline',
+    snapshot.wakeWordEnabled ? 'Wake word enabled' : 'Wake word disabled'
   ].join(' / ');
 
   useEffect(() => {
@@ -1888,10 +2045,20 @@ function SettingsShell({ snapshot }: { snapshot: RuntimeSnapshot }): React.JSX.E
     shellRef,
     {
       width: 220,
-      height: localError ? 356 : 324
+      height: localError ? 316 : 284
     },
-    [localError, snapshot.operationMode, snapshot.visionMode, snapshot.wakeWordEnabled, snapshot.wakeWordState]
+    [localError, snapshot.operationMode, snapshot.visionMode]
   );
+
+  const openStartupDefaults = async (): Promise<void> => {
+    setLocalError('');
+    try {
+      await window.pixelPilot.closeSettingsWindow();
+      await window.pixelPilot.toggleStartupSettingsWindow();
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'Unable to open startup defaults right now.');
+    }
+  };
 
   const runMenuAction = async (method: string, payload?: Record<string, unknown>): Promise<void> => {
     setLocalError('');
@@ -1935,17 +2102,13 @@ function SettingsShell({ snapshot }: { snapshot: RuntimeSnapshot }): React.JSX.E
           />
         ))}
         <div className="mx-1 my-1 h-px bg-[#e2e8f0]" />
-        <div className="px-3.5 py-1.5 text-[12px] font-semibold text-slate-500">
-          Wake Word
-        </div>
-        <MenuItemButton
-          label={snapshot.wakeWordEnabled ? 'Wake word on' : 'Wake word off'}
-          active={snapshot.wakeWordEnabled}
-          onClick={() => void runMenuAction('wakeWord.setEnabled', { enabled: !snapshot.wakeWordEnabled })}
-        />
-        <div className="px-3.5 pb-2 text-[11px] text-slate-500">
-          {wakeWordStatusDescription(snapshot)}
-        </div>
+        <button
+          type="button"
+          onClick={() => void openStartupDefaults()}
+          className="no-drag flex w-full items-center rounded-lg px-3.5 py-2 text-left text-[13px] text-slate-800 transition hover:bg-[#e2e8f0]"
+        >
+          Startup Defaults
+        </button>
         <div className="mx-1 my-1 h-px bg-[#e2e8f0]" />
         <button
           type="button"
@@ -2410,6 +2573,8 @@ export default function App(): React.JSX.Element {
     <SidecarShell snapshot={snapshot} frame={sidecarFrame} />
   ) : windowKind === 'settings' ? (
     <SettingsShell snapshot={snapshot} />
+  ) : windowKind === 'startup-settings' ? (
+    <StartupDefaultsShell snapshot={snapshot} />
   ) : (
     <OverlayShell
       snapshot={snapshot}
@@ -2429,12 +2594,12 @@ export default function App(): React.JSX.Element {
           ? 'flex items-start justify-center'
           : windowKind === 'sidecar'
             ? 'flex items-start justify-center p-3'
-            : windowKind === 'settings'
+            : windowKind === 'settings' || windowKind === 'startup-settings'
               ? 'flex items-start justify-start'
             : 'flex items-start justify-center p-3'
       ].join(' ')}
     >
-      {windowKind !== 'settings' && (
+      {windowKind !== 'settings' && windowKind !== 'startup-settings' && (
         <>
           <div className="pointer-events-none absolute left-[8%] top-[-18%] h-28 w-28 rounded-full bg-sky-200/18 blur-3xl" />
           <div className="pointer-events-none absolute bottom-[-20%] right-[10%] h-32 w-32 rounded-full bg-slate-300/18 blur-3xl" />

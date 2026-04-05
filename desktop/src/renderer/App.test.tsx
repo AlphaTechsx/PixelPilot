@@ -75,12 +75,16 @@ function makeSnapshot(overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
 }
 
 function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
+  getStartupDefaults: ReturnType<typeof vi.fn>;
   invokeRuntime: ReturnType<typeof vi.fn>;
   setBackgroundHidden: ReturnType<typeof vi.fn>;
   setTrayOnly: ReturnType<typeof vi.fn>;
   setExpanded: ReturnType<typeof vi.fn>;
   toggleSettingsWindow: ReturnType<typeof vi.fn>;
   closeSettingsWindow: ReturnType<typeof vi.fn>;
+  toggleStartupSettingsWindow: ReturnType<typeof vi.fn>;
+  closeStartupSettingsWindow: ReturnType<typeof vi.fn>;
+  setStartupDefaults: ReturnType<typeof vi.fn>;
   updateWindowLayout: ReturnType<typeof vi.fn>;
   resolveConfirmation: ReturnType<typeof vi.fn>;
   quitApp: ReturnType<typeof vi.fn>;
@@ -95,11 +99,25 @@ function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
   let sidecarListener: Listener<SidecarFrame> | null = null;
 
   const invokeRuntime = vi.fn().mockResolvedValue({});
+  const getStartupDefaults = vi.fn().mockResolvedValue({
+    operationMode: (snapshot?.operationMode || 'AUTO').toUpperCase(),
+    visionMode: (snapshot?.visionMode || 'OCR').toUpperCase(),
+    hasPersisted: false,
+    source: 'runtime'
+  });
   const setBackgroundHidden = vi.fn().mockResolvedValue({});
   const setTrayOnly = vi.fn().mockResolvedValue({});
   const setExpanded = vi.fn().mockResolvedValue({});
   const toggleSettingsWindow = vi.fn().mockResolvedValue({ visible: true });
   const closeSettingsWindow = vi.fn().mockResolvedValue({ visible: false });
+  const toggleStartupSettingsWindow = vi.fn().mockResolvedValue({ visible: true });
+  const closeStartupSettingsWindow = vi.fn().mockResolvedValue({ visible: false });
+  const setStartupDefaults = vi.fn().mockResolvedValue({
+    operationMode: (snapshot?.operationMode || 'AUTO').toUpperCase(),
+    visionMode: (snapshot?.visionMode || 'OCR').toUpperCase(),
+    hasPersisted: true,
+    source: 'persisted'
+  });
   const updateWindowLayout = vi.fn().mockResolvedValue(undefined);
   const resolveConfirmation = vi.fn().mockResolvedValue({});
   const quitApp = vi.fn().mockResolvedValue(undefined);
@@ -107,12 +125,16 @@ function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
   const api: PixelPilotApi = {
     getWindowKind: vi.fn().mockResolvedValue(windowKind),
     getSnapshot: vi.fn().mockResolvedValue(snapshot),
+    getStartupDefaults,
     invokeRuntime,
     setExpanded,
     setBackgroundHidden,
     setTrayOnly,
     toggleSettingsWindow,
     closeSettingsWindow,
+    toggleStartupSettingsWindow,
+    closeStartupSettingsWindow,
+    setStartupDefaults,
     updateWindowLayout,
     resolveConfirmation,
     quitApp,
@@ -148,12 +170,16 @@ function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
   });
 
   return {
+    getStartupDefaults,
     invokeRuntime,
     setBackgroundHidden,
     setTrayOnly,
     setExpanded,
     toggleSettingsWindow,
     closeSettingsWindow,
+    toggleStartupSettingsWindow,
+    closeStartupSettingsWindow,
+    setStartupDefaults,
     updateWindowLayout,
     resolveConfirmation,
     quitApp,
@@ -480,26 +506,69 @@ describe('Electron renderer App', () => {
       'settings',
       makeSnapshot({
         operationMode: 'SAFE',
-        visionMode: 'OCR',
-        wakeWordEnabled: true
+        visionMode: 'OCR'
       })
     );
 
     render(<App />);
 
     expect(await screen.findByText(/^mode$/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /wake word on/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /wake word off/i })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: /^auto$/i }));
     await userEvent.click(screen.getByRole('button', { name: /^robo$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /wake word on/i }));
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }));
 
     await waitFor(() => {
-      expect(controls.closeSettingsWindow).toHaveBeenCalledTimes(4);
+      expect(controls.closeSettingsWindow).toHaveBeenCalledTimes(3);
       expect(controls.invokeRuntime).toHaveBeenCalledWith('mode.set', { value: 'AUTO' });
       expect(controls.invokeRuntime).toHaveBeenCalledWith('vision.set', { value: 'ROBO' });
-      expect(controls.invokeRuntime).toHaveBeenCalledWith('wakeWord.setEnabled', { enabled: false });
       expect(controls.invokeRuntime).toHaveBeenCalledWith('auth.logout', undefined);
+    });
+  });
+
+  it('opens startup defaults popup from settings list', async () => {
+    const controls = setupApi('settings', makeSnapshot({ operationMode: 'SAFE', visionMode: 'OCR' }));
+
+    render(<App />);
+
+    expect(await screen.findByText(/^mode$/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /startup defaults/i }));
+
+    await waitFor(() => {
+      expect(controls.closeSettingsWindow).toHaveBeenCalledTimes(1);
+      expect(controls.toggleStartupSettingsWindow).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('renders startup defaults popup and saves persisted defaults', async () => {
+    const controls = setupApi(
+      'startup-settings',
+      makeSnapshot({ operationMode: 'SAFE', visionMode: 'OCR' })
+    );
+    controls.getStartupDefaults.mockResolvedValueOnce({
+      operationMode: 'SAFE',
+      visionMode: 'OCR',
+      hasPersisted: false,
+      source: 'runtime'
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText(/^Startup Defaults$/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^auto$/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: /^auto$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^robo$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /save startup defaults/i }));
+
+    await waitFor(() => {
+      expect(controls.setStartupDefaults).toHaveBeenCalledWith({
+        operationMode: 'AUTO',
+        visionMode: 'ROBO'
+      });
     });
   });
 
@@ -559,6 +628,7 @@ describe('Electron renderer App', () => {
     render(<App />);
 
     expect(await screen.findByText(/process details/i)).toBeInTheDocument();
+    expect(screen.getByText(/wake word enabled/i)).toBeInTheDocument();
     expect(screen.getByText(/open the latest project notes\./i)).toBeInTheDocument();
     expect(screen.getByText(/i can search the current workspace and summarize the notes\./i)).toBeInTheDocument();
     expect(screen.queryByText(/bridge connected\./i)).not.toBeInTheDocument();

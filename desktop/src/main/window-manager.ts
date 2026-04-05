@@ -7,11 +7,13 @@ import type {
   RuntimeEventEnvelope,
   RuntimeSnapshot,
   SidecarFrame,
+  StartupDefaultsSnapshot,
   WindowKind,
   WindowLayoutPayload
 } from '../shared/types.js';
 import { failureResult, successResult, type IpcResult } from '../shared/ipc-result.js';
 import { getAnchoredWindowBounds, normalizeWindowSize } from './window-layout.js';
+import { StartupDefaultsStore } from './startup-defaults.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,8 +28,10 @@ export class WindowManager {
   private notchWindow: BrowserWindowType | null = null;
   private sidecarWindow: BrowserWindowType | null = null;
   private settingsWindow: BrowserWindowType | null = null;
+  private startupSettingsWindow: BrowserWindowType | null = null;
   private tray: TrayType | null = null;
   private readonly invokeRuntime: InvokeRuntime;
+  private readonly startupDefaultsStore: StartupDefaultsStore;
   private readonly kinds = new Map<number, WindowKind>();
   private currentSnapshot: RuntimeSnapshot | null = null;
   private pendingConfirmations = new Map<string, (payload: Record<string, unknown>) => void>();
@@ -37,8 +41,9 @@ export class WindowManager {
   private readonly userMovedKinds = new Set<WindowKind>();
   private readonly programmaticMoveKinds = new Set<WindowKind>();
 
-  constructor(invokeRuntime: InvokeRuntime) {
+  constructor(invokeRuntime: InvokeRuntime, startupDefaultsStore: StartupDefaultsStore) {
     this.invokeRuntime = invokeRuntime;
+    this.startupDefaultsStore = startupDefaultsStore;
     this.registerIpc();
   }
 
@@ -47,9 +52,11 @@ export class WindowManager {
     this.notchWindow = this.createWindow('notch', 420, 76, true);
     this.sidecarWindow = this.createWindow('sidecar', 390, 420, true);
     this.settingsWindow = this.createWindow('settings', 220, 252, true);
+    this.startupSettingsWindow = this.createWindow('startup-settings', 320, 320, true);
     this.notchWindow.hide();
     this.sidecarWindow.hide();
     this.settingsWindow.hide();
+    this.startupSettingsWindow.hide();
     this.repositionAnchoredWindows();
     screen.on('display-metrics-changed', this.repositionAnchoredWindows);
     screen.on('display-added', this.repositionAnchoredWindows);
@@ -69,6 +76,7 @@ export class WindowManager {
     this.notchWindow?.destroy();
     this.sidecarWindow?.destroy();
     this.settingsWindow?.destroy();
+    this.startupSettingsWindow?.destroy();
   }
 
   getWindowKind(senderId: number): WindowKind {
@@ -87,7 +95,13 @@ export class WindowManager {
   }
 
   broadcastEvent(envelope: RuntimeEventEnvelope): void {
-    for (const win of [this.overlayWindow, this.notchWindow, this.sidecarWindow, this.settingsWindow]) {
+    for (const win of [
+      this.overlayWindow,
+      this.notchWindow,
+      this.sidecarWindow,
+      this.settingsWindow,
+      this.startupSettingsWindow,
+    ]) {
       win?.webContents.send('runtime:event', envelope);
     }
   }
@@ -130,7 +144,7 @@ export class WindowManager {
       hasShadow: false,
       skipTaskbar,
       alwaysOnTop: true,
-      movable: kind !== 'notch' && kind !== 'settings',
+      movable: kind !== 'notch' && kind !== 'settings' && kind !== 'startup-settings',
       maximizable: false,
       minimizable: false,
       backgroundColor: '#00000000',
@@ -145,13 +159,19 @@ export class WindowManager {
       if (!this.programmaticMoveKinds.has(kind) && kind !== 'notch') {
         this.userMovedKinds.add(kind);
       }
-      if (kind === 'overlay' && this.settingsWindow?.isVisible()) {
+      if (kind === 'overlay' && (this.settingsWindow?.isVisible() || this.startupSettingsWindow?.isVisible())) {
         this.positionSettingsWindow();
+        this.positionStartupSettingsWindow();
       }
     });
     if (kind === 'settings') {
       window.on('blur', () => {
         this.settingsWindow?.hide();
+      });
+    }
+    if (kind === 'startup-settings') {
+      window.on('blur', () => {
+        this.startupSettingsWindow?.hide();
       });
     }
     void this.loadRenderer(window, kind);
@@ -203,6 +223,9 @@ export class WindowManager {
   private registerIpc(): void {
     ipcMain.handle('pixelpilot:get-window-kind', (event) => this.getWindowKind(event.sender.id));
     ipcMain.handle('pixelpilot:get-snapshot', () => this.currentSnapshot);
+    ipcMain.handle('pixelpilot:get-startup-defaults', () =>
+      this.wrapIpcResult(() => this.getStartupDefaults())
+    );
     ipcMain.handle('pixelpilot:invoke-runtime', (_event, method: string, payload?: Record<string, unknown>) =>
       this.wrapIpcResult(() => this.invokeRuntime(method, payload))
     );
@@ -220,6 +243,17 @@ export class WindowManager {
     );
     ipcMain.handle('pixelpilot:close-settings-window', () =>
       this.wrapIpcResult(() => this.closeSettingsWindow())
+    );
+    ipcMain.handle('pixelpilot:toggle-startup-settings-window', () =>
+      this.wrapIpcResult(() => this.toggleStartupSettingsWindow())
+    );
+    ipcMain.handle('pixelpilot:close-startup-settings-window', () =>
+      this.wrapIpcResult(() => this.closeStartupSettingsWindow())
+    );
+    ipcMain.handle(
+      'pixelpilot:set-startup-defaults',
+      (_event, payload: Record<string, unknown>) =>
+        this.wrapIpcResult(() => this.setStartupDefaults(payload))
     );
     ipcMain.handle('pixelpilot:update-window-layout', (event, payload: WindowLayoutPayload) =>
       this.wrapIpcResult(() => this.updateWindowLayout(event.sender.id, payload))
@@ -251,9 +285,11 @@ export class WindowManager {
       this.overlayWindow?.hide();
       this.notchWindow?.hide();
       this.settingsWindow?.hide();
+      this.startupSettingsWindow?.hide();
     } else if (hidden) {
       this.overlayWindow?.hide();
       this.settingsWindow?.hide();
+      this.startupSettingsWindow?.hide();
       this.anchorWindow('notch');
       this.notchWindow?.showInactive();
     } else {
@@ -269,6 +305,7 @@ export class WindowManager {
 
     if (this.currentSnapshot.auth.needsAuth) {
       this.settingsWindow?.hide();
+      this.startupSettingsWindow?.hide();
     }
   }
 
@@ -287,9 +324,28 @@ export class WindowManager {
   }
 
   private broadcastState(snapshot: RuntimeSnapshot): void {
-    for (const win of [this.overlayWindow, this.notchWindow, this.sidecarWindow, this.settingsWindow]) {
+    for (const win of [
+      this.overlayWindow,
+      this.notchWindow,
+      this.sidecarWindow,
+      this.settingsWindow,
+      this.startupSettingsWindow,
+    ]) {
       win?.webContents.send('runtime:state', snapshot);
     }
+  }
+
+  private getStartupDefaults(): StartupDefaultsSnapshot {
+    return this.startupDefaultsStore.resolve(this.currentSnapshot);
+  }
+
+  private setStartupDefaults(payload: Record<string, unknown>): StartupDefaultsSnapshot {
+    const operationMode = String(payload.operationMode || '').trim().toUpperCase();
+    const visionMode = String(payload.visionMode || '').trim().toUpperCase();
+    return this.startupDefaultsStore.save({
+      operationMode: operationMode as StartupDefaultsSnapshot['operationMode'],
+      visionMode: visionMode as StartupDefaultsSnapshot['visionMode'],
+    });
   }
 
   private async promptConfirmation(request: RendererConfirmationRequest): Promise<Record<string, unknown>> {
@@ -366,6 +422,7 @@ export class WindowManager {
       this.currentSnapshot = { ...this.currentSnapshot, backgroundHidden: hidden };
       if (hidden) {
         this.settingsWindow?.hide();
+        this.startupSettingsWindow?.hide();
       }
       this.syncWindowVisibility();
       this.broadcastState(this.currentSnapshot);
@@ -393,6 +450,7 @@ export class WindowManager {
       this.currentSnapshot = { ...this.currentSnapshot, backgroundHidden: hidden };
       if (hidden) {
         this.settingsWindow?.hide();
+        this.startupSettingsWindow?.hide();
       }
       this.syncWindowVisibility();
       this.broadcastState(this.currentSnapshot);
@@ -422,6 +480,9 @@ export class WindowManager {
     if (this.settingsWindow?.isVisible()) {
       this.positionSettingsWindow();
     }
+    if (this.startupSettingsWindow?.isVisible()) {
+      this.positionStartupSettingsWindow();
+    }
   };
 
   private getWindow(kind: WindowKind): BrowserWindowType | null {
@@ -433,6 +494,9 @@ export class WindowManager {
     }
     if (kind === 'settings') {
       return this.settingsWindow;
+    }
+    if (kind === 'startup-settings') {
+      return this.startupSettingsWindow;
     }
     return this.overlayWindow;
   }
@@ -469,11 +533,17 @@ export class WindowManager {
       return;
     }
 
+    if (kind === 'startup-settings') {
+      this.positionStartupSettingsWindow(normalized);
+      return;
+    }
+
     if (kind === 'notch' || !this.userMovedKinds.has(kind)) {
       const anchored = getAnchoredWindowBounds(kind, display.workArea, normalized);
       this.setWindowBounds(kind, window, anchored);
-      if (kind === 'overlay' && this.settingsWindow?.isVisible()) {
+      if (kind === 'overlay' && (this.settingsWindow?.isVisible() || this.startupSettingsWindow?.isVisible())) {
         this.positionSettingsWindow();
+        this.positionStartupSettingsWindow();
       }
       return;
     }
@@ -485,8 +555,9 @@ export class WindowManager {
       width: normalized.width,
       height: normalized.height
     });
-    if (kind === 'overlay' && this.settingsWindow?.isVisible()) {
+    if (kind === 'overlay' && (this.settingsWindow?.isVisible() || this.startupSettingsWindow?.isVisible())) {
       this.positionSettingsWindow();
+      this.positionStartupSettingsWindow();
     }
   }
 
@@ -497,12 +568,14 @@ export class WindowManager {
     }
     if (this.currentSnapshot?.backgroundHidden || this.currentSnapshot?.auth.needsAuth) {
       window.hide();
+      this.startupSettingsWindow?.hide();
       return { visible: false };
     }
     if (window.isVisible()) {
       window.hide();
       return { visible: false };
     }
+    this.startupSettingsWindow?.hide();
     this.positionSettingsWindow();
     window.show();
     window.focus();
@@ -511,6 +584,32 @@ export class WindowManager {
 
   private closeSettingsWindow(): { visible: boolean } {
     this.settingsWindow?.hide();
+    return { visible: false };
+  }
+
+  private toggleStartupSettingsWindow(): { visible: boolean } {
+    const window = this.startupSettingsWindow;
+    if (!window || window.isDestroyed()) {
+      return { visible: false };
+    }
+    if (this.currentSnapshot?.backgroundHidden || this.currentSnapshot?.auth.needsAuth) {
+      window.hide();
+      this.settingsWindow?.hide();
+      return { visible: false };
+    }
+    if (window.isVisible()) {
+      window.hide();
+      return { visible: false };
+    }
+    this.settingsWindow?.hide();
+    this.positionStartupSettingsWindow();
+    window.show();
+    window.focus();
+    return { visible: true };
+  }
+
+  private closeStartupSettingsWindow(): { visible: boolean } {
+    this.startupSettingsWindow?.hide();
     return { visible: false };
   }
 
@@ -538,6 +637,33 @@ export class WindowManager {
       y,
       width: normalized.width,
       height: normalized.height
+    });
+  }
+
+  private positionStartupSettingsWindow(size?: { width: number; height: number }): void {
+    const startupWindow = this.startupSettingsWindow;
+    const overlayWindow = this.overlayWindow;
+    if (!startupWindow || startupWindow.isDestroyed() || !overlayWindow || overlayWindow.isDestroyed()) {
+      return;
+    }
+
+    const overlayBounds = overlayWindow.getBounds();
+    const display = screen.getDisplayMatching(overlayBounds);
+    const normalized = normalizeWindowSize('startup-settings', display.workArea, size ?? startupWindow.getBounds());
+    const x = Math.min(
+      display.workArea.x + display.workArea.width - normalized.width - 12,
+      Math.max(display.workArea.x + 12, overlayBounds.x + overlayBounds.width - normalized.width - 8)
+    );
+    const y = Math.min(
+      display.workArea.y + display.workArea.height - normalized.height - 12,
+      Math.max(display.workArea.y + 12, overlayBounds.y + 54)
+    );
+
+    this.setWindowBounds('startup-settings', startupWindow, {
+      x,
+      y,
+      width: normalized.width,
+      height: normalized.height,
     });
   }
 

@@ -67,6 +67,13 @@ export type RendererConfirmationRequest = {
   text: string;
 };
 
+export type StartupDefaultsSnapshot = {
+  operationMode: 'GUIDANCE' | 'SAFE' | 'AUTO';
+  visionMode: 'ROBO' | 'OCR';
+  hasPersisted: boolean;
+  source: 'persisted' | 'runtime' | 'fallback';
+};
+
 export type SidecarFrame = {
   width: number;
   height: number;
@@ -74,7 +81,7 @@ export type SidecarFrame = {
   dataUrl: string;
 };
 
-export type WindowKind = 'overlay' | 'notch' | 'sidecar' | 'settings';
+export type WindowKind = 'overlay' | 'notch' | 'sidecar' | 'settings' | 'startup-settings';
 
 export type RuntimeCommandPayload = Record<string, unknown>;
 
@@ -86,12 +93,19 @@ export type WindowLayoutPayload = {
 export type PixelPilotApi = {
   getWindowKind: () => Promise<WindowKind>;
   getSnapshot: () => Promise<RuntimeSnapshot | null>;
+  getStartupDefaults: () => Promise<StartupDefaultsSnapshot>;
   invokeRuntime: (method: string, payload?: RuntimeCommandPayload) => Promise<Record<string, unknown>>;
   setExpanded: (expanded: boolean) => Promise<Record<string, unknown>>;
   setBackgroundHidden: (hidden: boolean) => Promise<Record<string, unknown>>;
   setTrayOnly: (enabled: boolean) => Promise<Record<string, unknown>>;
   toggleSettingsWindow: () => Promise<{ visible: boolean }>;
   closeSettingsWindow: () => Promise<{ visible: boolean }>;
+  toggleStartupSettingsWindow: () => Promise<{ visible: boolean }>;
+  closeStartupSettingsWindow: () => Promise<{ visible: boolean }>;
+  setStartupDefaults: (payload: {
+    operationMode: 'GUIDANCE' | 'SAFE' | 'AUTO';
+    visionMode: 'ROBO' | 'OCR';
+  }) => Promise<StartupDefaultsSnapshot>;
   updateWindowLayout: (payload: WindowLayoutPayload) => Promise<void>;
   resolveConfirmation: (id: string, payload: RuntimeCommandPayload) => Promise<Record<string, unknown>>;
   quitApp: () => Promise<void>;

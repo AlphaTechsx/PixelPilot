@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { RuntimeBridgeClient } from './bridge-client.js';
 import { RuntimeProcessManager } from './runtime-process.js';
+import { StartupDefaultsStore } from './startup-defaults.js';
 import { WindowManager } from './window-manager.js';
 import type { RuntimeEventEnvelope } from '../shared/types.js';
 
@@ -16,6 +17,7 @@ if (!hasSingleInstanceLock) {
 let runtimeProcess: RuntimeProcessManager | null = null;
 let bridgeClient: RuntimeBridgeClient | null = null;
 let windowManager: WindowManager | null = null;
+let startupDefaultsStore: StartupDefaultsStore | null = null;
 let bridgeRecoveryTimer: NodeJS.Timeout | null = null;
 let bridgeRecoveryInProgress = false;
 let shuttingDown = false;
@@ -140,6 +142,19 @@ async function startRuntimeBridgeClient(
   const client = new RuntimeBridgeClient(endpoints.controlUrl, endpoints.sidecarUrl);
   attachBridgeHandlers(client);
   client.start();
+
+  if (!reuseRuntime && startupDefaultsStore) {
+    const defaults = startupDefaultsStore.loadPersisted();
+    if (defaults) {
+      try {
+        await client.sendCommand('mode.set', { value: defaults.operationMode });
+        await client.sendCommand('vision.set', { value: defaults.visionMode });
+      } catch (error) {
+        console.error('Failed to apply startup defaults to runtime.', error);
+      }
+    }
+  }
+
   return client;
 }
 
@@ -181,7 +196,11 @@ async function recoverRuntimeBridge(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
-  windowManager = new WindowManager((method, payload) => bridgeClient!.sendCommand(method, payload));
+  startupDefaultsStore = new StartupDefaultsStore(app.getPath('userData'));
+  windowManager = new WindowManager(
+    (method, payload) => bridgeClient!.sendCommand(method, payload),
+    startupDefaultsStore,
+  );
 
   windowManager.createWindows();
   bridgeClient = await startRuntimeBridgeClient({ reuseRuntime: false });

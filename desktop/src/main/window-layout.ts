@@ -52,6 +52,13 @@ export function normalizeWindowSize(kind: WindowKind, workArea: ScreenWorkArea, 
     };
   }
 
+  if (kind === 'startup-settings') {
+    return {
+      width: clamp(Math.round(size.width), 260, Math.min(380, maxWidth)),
+      height: clamp(Math.round(size.height), 220, Math.min(460, maxHeight))
+    };
+  }
+
   return {
     width: clamp(Math.round(size.width), 620, maxWidth),
     height: clamp(Math.round(size.height), 84, Math.min(820, maxHeight))
