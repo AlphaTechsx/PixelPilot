@@ -9,6 +9,13 @@ from PySide6.QtCore import QObject, QTimer
 
 from auth_manager import get_auth_manager
 from config import Config
+from uac.detection import get_uac_state_snapshot
+from uac.flow import (
+    get_external_uac_mode,
+    get_uac_flow_progress,
+    get_uac_queue_gate,
+    set_external_uac_mode,
+)
 from .auth import get_auth_state, logout_all, save_api_key
 from .snapshot import build_runtime_snapshot
 
@@ -133,6 +140,39 @@ class ElectronRuntimeService(QObject):
                 "wakeWordEnabled": self.state_store.wakeWordEnabled,
                 "wakeWordState": self.state_store.wakeWordState,
                 "wakeWordUnavailableReason": self.state_store.wakeWordUnavailableReason,
+            }
+        if command == "uac.getState":
+            return {
+                "uac": get_uac_state_snapshot(),
+                "uacGate": get_uac_queue_gate(),
+            }
+        if command == "uac.getProgress":
+            return {
+                "uac": get_uac_flow_progress(),
+                "uacGate": get_uac_queue_gate(),
+            }
+        if command == "uac.getMode":
+            return {
+                "uacMode": get_external_uac_mode(),
+                "uacGate": get_uac_queue_gate(),
+            }
+        if command == "uac.setMode":
+            if "active" not in body:
+                raise RuntimeError("uac.setMode requires an 'active' boolean.")
+            logger.info(
+                "Runtime command uac.setMode active=%s source=%s",
+                bool(body.get("active")),
+                str(body.get("source") or "external_detector").strip() or "external_detector",
+            )
+            mode_state = set_external_uac_mode(
+                bool(body.get("active")),
+                source=str(body.get("source") or "external_detector"),
+                message=str(body.get("message") or ""),
+                prompt=body.get("prompt") if isinstance(body.get("prompt"), dict) else None,
+            )
+            return {
+                "uacMode": mode_state,
+                "uacGate": get_uac_queue_gate(),
             }
         if command == "live.stop":
             self.controller.stop_current_turn()

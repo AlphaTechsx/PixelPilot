@@ -148,15 +148,50 @@ def capture_bmp(snapshot_path: str) -> bool:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--request", required=True)
+    parser.add_argument("--request")
+    parser.add_argument("--decision")
     return parser.parse_args()
+
+
+def _decision_from_args(raw_decision: str) -> str:
+    clean = str(raw_decision or "").strip().upper()
+    if clean in {"ALLOW", "DENY"}:
+        return clean
+    return ""
+
+
+def _execute_decision(decision: str) -> None:
+    if decision == "ALLOW":
+        log("Action: ALLOW (Alt+Y)")
+        hotkey(VK_MENU, VK_Y)
+        time.sleep(Config.UAC_HELPER_POST_ACTION_DELAY_SECONDS)
+        press(VK_LEFT)
+        press(VK_RETURN)
+        return
+
+    log("Action: DENY (Alt+N)")
+    hotkey(VK_MENU, VK_N)
+    time.sleep(Config.UAC_HELPER_POST_ACTION_DELAY_SECONDS)
+    press(VK_ESCAPE)
 
 
 def main() -> None:
     log("--- AGENT START ---")
     try:
         args = _parse_args()
-        request_payload = load_request(args.request, max_age_seconds=Config.UAC_REQUEST_MAX_AGE_SECONDS)
+        decision_arg = _decision_from_args(getattr(args, "decision", ""))
+
+        if decision_arg:
+            _execute_decision(decision_arg)
+            log("--- AGENT FINISH ---")
+            return
+
+        request_arg = str(getattr(args, "request", "") or "").strip()
+        if not request_arg:
+            log("No --request or --decision provided. Exiting.")
+            return
+
+        request_payload = load_request(request_arg, max_age_seconds=Config.UAC_REQUEST_MAX_AGE_SECONDS)
         if not request_payload:
             log("Invalid or stale UAC request. Exiting with DENY default.")
             return
@@ -193,17 +228,7 @@ def main() -> None:
                 command = "DENY"
             log(f"Received response: allow={allow} confirmed={user_confirmed}")
 
-        if command == "ALLOW":
-            log("Action: ALLOW (Alt+Y)")
-            hotkey(VK_MENU, VK_Y)
-            time.sleep(Config.UAC_HELPER_POST_ACTION_DELAY_SECONDS)
-            press(VK_LEFT)
-            press(VK_RETURN)
-        else:
-            log("Action: DENY (Alt+N)")
-            hotkey(VK_MENU, VK_N)
-            time.sleep(Config.UAC_HELPER_POST_ACTION_DELAY_SECONDS)
-            press(VK_ESCAPE)
+        _execute_decision(command)
 
         log("--- AGENT FINISH ---")
     except SystemExit:

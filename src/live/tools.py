@@ -10,6 +10,13 @@ import pyautogui
 
 from config import Config, OperationMode
 from live.broker import LiveActionBroker
+from uac.approval import resolve_uac_allow_decision
+from uac.detection import get_uac_state_snapshot
+from uac.flow import (
+    get_uac_flow_progress,
+    get_uac_queue_gate,
+    handle_uac_prompt_blocking,
+)
 import tools.mouse as mouse
 from tools import ui_automation
 
@@ -22,6 +29,9 @@ class LiveToolRegistry:
         "ui_list_windows",
         "ui_read_text",
         "capture_screen",
+        "capture_and_detail",
+        "uac_get_state",
+        "uac_get_progress",
         "get_action_status",
         "wait_for_action",
         "disconnect_live_session",
@@ -45,15 +55,18 @@ class LiveToolRegistry:
         on_capture_ready: Optional[Callable[[str, dict[str, Any]], None]] = None,
         on_disconnect_requested: Optional[Callable[[str], dict[str, Any]]] = None,
         on_reasoning_escalation: Optional[Callable[[str, str], dict[str, Any]]] = None,
+        on_status_note: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.agent = agent
         self.broker = broker
         self.on_capture_ready = on_capture_ready
         self.on_disconnect_requested = on_disconnect_requested
         self.on_reasoning_escalation = on_reasoning_escalation
+        self.on_status_note = on_status_note
         self._guidance_mode = False
         self.last_snapshot_summary: Optional[dict[str, Any]] = None
         self.last_capture_summary: Optional[dict[str, Any]] = None
+        self._last_uac_note = ""
 
     def set_guidance_mode(self, enabled: bool) -> None:
         self._guidance_mode = bool(enabled)
@@ -253,8 +266,41 @@ class LiveToolRegistry:
             {
                 "name": "capture_screen",
                 "description": (
-                    "Capture a high-resolution still from the active workspace for detailed visual reasoning. "
-                    "Use this only when UI Automation or coarse live video is insufficient."
+                    "Capture a high-resolution screenshot only from the active workspace. "
+                    "This tool does NOT run logo finding, element ID extraction, or edge analysis."
+                ),
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {},
+                },
+            },
+            {
+                "name": "capture_and_detail",
+                "description": (
+                    "Capture and run detailed visual analysis: logo/icon finding, element IDs, "
+                    "annotated debug overlay, and edge overlay."
+                ),
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {},
+                },
+            },
+            {
+                "name": "uac_get_state",
+                "description": (
+                    "Read the current Windows UAC state, including whether a secure-desktop UAC prompt "
+                    "is likely active and whether this process is elevated."
+                ),
+                "parameters": {
+                    "type": "OBJECT",
+                    "properties": {},
+                },
+            },
+            {
+                "name": "uac_get_progress",
+                "description": (
+                    "Read the live UAC handling workflow progress for the current automation action. "
+                    "Use this to check whether UAC is being handled, waiting, resolved, or failed."
                 ),
                 "parameters": {
                     "type": "OBJECT",
@@ -399,6 +445,12 @@ class LiveToolRegistry:
             return self._handle_read_text(payload)
         if tool_name == "capture_screen":
             return self._handle_capture_screen()
+        if tool_name == "capture_and_detail":
+            return self._handle_capture_and_detail()
+        if tool_name == "uac_get_state":
+            return self._handle_uac_get_state()
+        if tool_name == "uac_get_progress":
+            return self._handle_uac_get_progress()
         if tool_name == "get_action_status":
             return self.broker.get_action_status(str(payload.get("action_id") or ""))
         if tool_name == "wait_for_action":
@@ -467,6 +519,164 @@ class LiveToolRegistry:
             return settled
         return submitted
 
+    def _emit_status_note(self, message: str) -> None:
+        clean = str(message or "").strip()
+        if not clean:
+            return
+        if clean == self._last_uac_note:
+            return
+        self._last_uac_note = clean
+        callback = self.on_status_note
+        if callback is None:
+            return
+        try:
+            callback(clean)
+        except Exception:
+            logger.debug("Failed to emit status note", exc_info=True)
+
+    def _prompt_uac_confirmation(
+        self,
+        prompt_state: dict[str, Any],
+        action_name: str,
+        *,
+        expected_intent: str = "",
+    ) -> bool:
+        snapshot_path = str(prompt_state.get("uac_snapshot_path") or "").strip()
+        intent = str(expected_intent or "").strip()
+
+        if snapshot_path:
+            self._emit_status_note("UAC: Secure desktop screenshot captured. Evaluating expected action match.")
+        try:
+            return bool(
+                resolve_uac_allow_decision(
+                    prompt_state=prompt_state,
+                    action_name=action_name,
+                    image_path=snapshot_path or None,
+                    expected_intent=intent,
+                    chat_window=getattr(self.agent, "chat_window", None),
+                    status_note_callback=self._emit_status_note,
+                    user_timeout_seconds=Config.UAC_USER_CONFIRM_TIMEOUT_SECONDS,
+                )
+            )
+        except Exception:
+            logger.exception("UAC approval decision helper failed")
+            self._emit_status_note("UAC approval helper failed. Defaulting to DENY.")
+            return False
+
+    def _on_uac_progress(self, progress: dict[str, Any]) -> None:
+        message = str(progress.get("message") or "").strip()
+        if message:
+            self._emit_status_note(message)
+        try:
+            self.broker.update_current_action(
+                f"UAC: {message}" if message else "UAC flow update",
+                result={"uac": progress},
+            )
+        except Exception:
+            logger.debug("Failed to publish UAC progress update", exc_info=True)
+
+    def _handle_uac_gate(self, *, action_name: str, cancel_event) -> dict[str, Any] | None:
+        flow_result = handle_uac_prompt_blocking(
+            action_label=action_name,
+            ask_confirmation=lambda prompt: self._prompt_uac_confirmation(
+                prompt,
+                action_name,
+                expected_intent=action_name,
+            ),
+            status_note_callback=lambda note: self._emit_status_note(f"UAC: {note}"),
+            progress_callback=self._on_uac_progress,
+            cancel_event=cancel_event,
+            poll_interval_seconds=Config.UAC_IPC_POLL_INTERVAL_SECONDS,
+            clear_timeout_seconds=Config.UAC_PROMPT_CLEAR_TIMEOUT_SECONDS,
+        )
+        if not bool(flow_result.get("handled")):
+            return None
+        if bool(flow_result.get("success")):
+            return None
+
+        status = str(flow_result.get("status") or "").strip().lower()
+        if status == "resolved_denied":
+            error_code = "uac_denied"
+        elif status == "cancelled":
+            error_code = "cancelled"
+        elif status == "timeout":
+            error_code = "uac_timeout"
+        elif status == "dispatch_failed":
+            error_code = "uac_dispatch_failed"
+        else:
+            error_code = "uac_not_resolved"
+
+        return {
+            "success": False,
+            "message": str(flow_result.get("message") or "UAC flow was not resolved."),
+            "error": error_code,
+            "uac": flow_result,
+        }
+
+    def handle_detected_uac_prompt(
+        self,
+        *,
+        source: str = "always_on_detector",
+        expected_intent: str = "",
+    ) -> dict[str, Any]:
+        action_name = str(source or "always_on_detector").strip() or "always_on_detector"
+        intent = str(expected_intent or "").strip() or action_name
+        logger.info(
+            "LIVE_UAC_EXPECTED_INTENT source=%s intent=%s",
+            action_name,
+            intent,
+        )
+        flow_result = handle_uac_prompt_blocking(
+            action_label=action_name,
+            ask_confirmation=lambda prompt: self._prompt_uac_confirmation(
+                prompt,
+                action_name,
+                expected_intent=intent,
+            ),
+            status_note_callback=lambda note: self._emit_status_note(f"UAC: {note}"),
+            progress_callback=self._on_uac_progress,
+            cancel_event=None,
+            poll_interval_seconds=Config.UAC_IPC_POLL_INTERVAL_SECONDS,
+            clear_timeout_seconds=Config.UAC_PROMPT_CLEAR_TIMEOUT_SECONDS,
+        )
+        if not bool(flow_result.get("handled")):
+            return {
+                "handled": False,
+                "success": True,
+                "status": "clear",
+                "message": "No active UAC prompt.",
+                "uac": flow_result,
+            }
+        if bool(flow_result.get("success")):
+            return {
+                "handled": True,
+                "success": True,
+                "status": str(flow_result.get("status") or "resolved_allowed"),
+                "message": str(flow_result.get("message") or "UAC prompt handled."),
+                "uac": flow_result,
+            }
+
+        status = str(flow_result.get("status") or "").strip().lower()
+        if status == "resolved_denied":
+            error_code = "uac_denied"
+        elif status == "cancelled":
+            error_code = "cancelled"
+        elif status == "timeout":
+            error_code = "uac_timeout"
+        elif status == "dispatch_failed":
+            error_code = "uac_dispatch_failed"
+        else:
+            error_code = "uac_not_resolved"
+
+        return {
+            "handled": True,
+            "success": False,
+            "status": status or "failed",
+            "message": str(flow_result.get("message") or "UAC flow was not resolved."),
+            "error": error_code,
+            "uac": flow_result,
+        }
+
     @property
     def _desktop_manager(self):
         if self.agent.active_workspace == "agent":
@@ -528,7 +738,7 @@ class LiveToolRegistry:
                 }
             clicked = mouse.click_at(int(x), int(y), desktop_manager=dm)
             time.sleep(Config.WAIT_AFTER_CLICK)
-            return {
+            result = {
                 "success": bool(clicked),
                 "message": f"Clicked at ({int(x)}, {int(y)})" if clicked else "Failed to click",
                 "payload": {
@@ -540,10 +750,11 @@ class LiveToolRegistry:
                     "passthrough_enabled": passthrough_enabled,
                 },
             }
+            return result
 
         pyautogui.click(x=int(x), y=int(y), button=button, clicks=clicks, interval=0.07)
         time.sleep(Config.WAIT_AFTER_CLICK)
-        return {
+        result = {
             "success": True,
             "message": f"Clicked at ({int(x)}, {int(y)})",
             "payload": {
@@ -555,10 +766,12 @@ class LiveToolRegistry:
                 "passthrough_enabled": passthrough_enabled,
             },
         }
+        return result
 
     def _handle_type_text(self, args: dict[str, Any], cancel_event) -> dict[str, Any]:
         if cancel_event.is_set():
             return {"success": False, "cancelled": True, "message": "Action cancelled before typing."}
+
         payload = {"text": str(args.get("text") or "")}
         ui_element_id = str(args.get("ui_element_id") or "").strip()
         if ui_element_id:
@@ -568,6 +781,7 @@ class LiveToolRegistry:
     def _handle_press_key(self, args: dict[str, Any], cancel_event) -> dict[str, Any]:
         if cancel_event.is_set():
             return {"success": False, "cancelled": True, "message": "Action cancelled before key press."}
+
         payload = {"key": str(args.get("key") or "")}
         presses = max(1, int(args.get("presses") or 1))
         results = []
@@ -576,11 +790,12 @@ class LiveToolRegistry:
                 return {"success": False, "cancelled": True, "message": "Action cancelled during key presses."}
             results.append(self.agent.action_executor._execute_press_key(payload))
         success = all(item.get("success") for item in results)
-        return {
+        result = {
             "success": success,
             "message": f"Pressed key {payload['key']} x{presses}" if success else f"Failed to press key {payload['key']}",
             "payload": {"results": results},
         }
+        return result
 
     def _handle_key_combo(self, args: dict[str, Any], cancel_event) -> dict[str, Any]:
         if cancel_event.is_set():
@@ -673,16 +888,72 @@ class LiveToolRegistry:
                 active_action=self.broker.current_action_payload(),
             )
 
-        elements, _ref_sheet = self.agent.capture_screen()
-        screenshot_path = Config.SCREENSHOT_PATH if os.path.exists(Config.SCREENSHOT_PATH) else None
+        screenshot_path = self.agent.capture_screen()
+        if not screenshot_path:
+            return self._tool_response(
+                "capture_screen",
+                success=False,
+                message="Screenshot capture failed.",
+                error="capture_failed",
+            )
+
+        screenshot_path = str(screenshot_path)
         debug_path = Config.DEBUG_PATH if os.path.exists(Config.DEBUG_PATH) else None
         ref_path = Config.REF_PATH if os.path.exists(Config.REF_PATH) else None
+        edge_path = Config.EDGE_PATH if os.path.exists(getattr(Config, "EDGE_PATH", "")) else None
 
         summary = {
             "workspace": self.agent.active_workspace,
             "screenshot_path": screenshot_path,
             "debug_overlay_path": debug_path,
             "reference_sheet_path": ref_path,
+            "edge_overlay_path": edge_path,
+            "analysis": "none",
+        }
+        self.last_capture_summary = summary
+        if screenshot_path and self.on_capture_ready:
+            try:
+                self.on_capture_ready(screenshot_path, summary)
+            except Exception:
+                logger.debug("Failed to send capture callback", exc_info=True)
+        return self._tool_response(
+            "capture_screen",
+            success=True,
+            message="Screenshot capture completed (no detailed analysis).",
+            result=summary,
+        )
+
+    def _handle_capture_and_detail(self) -> dict[str, Any]:
+        if self.broker.has_pending():
+            return self._tool_response(
+                "capture_and_detail",
+                success=False,
+                message="Cannot capture while another action is queued or running.",
+                error="action_in_progress",
+                active_action=self.broker.current_action_payload(),
+            )
+
+        elements, _ref_sheet = self.agent.capture_and_detail()
+        screenshot_path = Config.SCREENSHOT_PATH if os.path.exists(Config.SCREENSHOT_PATH) else None
+        debug_path = Config.DEBUG_PATH if os.path.exists(Config.DEBUG_PATH) else None
+        ref_path = Config.REF_PATH if os.path.exists(Config.REF_PATH) else None
+        edge_path = Config.EDGE_PATH if os.path.exists(getattr(Config, "EDGE_PATH", "")) else None
+
+        if not screenshot_path:
+            return self._tool_response(
+                "capture_and_detail",
+                success=False,
+                message="Detailed capture failed.",
+                error="capture_failed",
+            )
+
+        summary = {
+            "workspace": self.agent.active_workspace,
+            "screenshot_path": screenshot_path,
+            "debug_overlay_path": debug_path,
+            "reference_sheet_path": ref_path,
+            "edge_overlay_path": edge_path,
+            "analysis": "detailed",
             "elements_count": len(elements or []),
             "elements_preview": [
                 {
@@ -700,12 +971,51 @@ class LiveToolRegistry:
             try:
                 self.on_capture_ready(screenshot_path, summary)
             except Exception:
-                logger.debug("Failed to send capture callback", exc_info=True)
+                logger.debug("Failed to send detailed capture callback", exc_info=True)
         return self._tool_response(
-            "capture_screen",
+            "capture_and_detail",
             success=True,
-            message="High-resolution capture completed.",
+            message="Detailed capture completed with element IDs/logo and edge overlays.",
             result=summary,
+        )
+
+    def _handle_uac_get_state(self) -> dict[str, Any]:
+        snapshot = get_uac_state_snapshot()
+        gate = get_uac_queue_gate()
+        prompt = dict(snapshot.get("prompt") or {})
+        likely_prompt = bool(prompt.get("likelyPromptActive"))
+        gate_active = bool(gate.get("active"))
+        message = str(gate.get("message") or "").strip()
+        if not message:
+            message = (
+                "UAC prompt is active."
+                if likely_prompt
+                else "No active UAC prompt detected."
+            )
+
+        enriched = dict(snapshot)
+        enriched["queue_gate"] = gate
+        return self._tool_response(
+            "uac_get_state",
+            success=True,
+            message=message,
+            result=enriched,
+            uac_mode_active=gate_active,
+        )
+
+    def _handle_uac_get_progress(self) -> dict[str, Any]:
+        progress = get_uac_flow_progress()
+        gate = get_uac_queue_gate()
+        message = str(gate.get("message") or progress.get("message") or "No active UAC flow.")
+
+        enriched = dict(progress)
+        enriched["queue_gate"] = gate
+        return self._tool_response(
+            "uac_get_progress",
+            success=True,
+            message=message,
+            result=enriched,
+            uac_mode_active=bool(gate.get("active")),
         )
 
     @staticmethod

@@ -172,8 +172,11 @@ class AgentOrchestrator:
         words = re.findall(r"[a-zA-Z0-9]+", (self.current_task or "").lower())
         return list(dict.fromkeys(word for word in words if word))
 
-    def capture_screen(self, force_robotics: bool = False):
-        return self.screen_capture.capture_screen(force_robotics)
+    def capture_screen(self) -> Optional[str]:
+        return self.screen_capture.capture_screen()
+
+    def capture_and_detail(self, force_robotics: bool = False):
+        return self.screen_capture.capture_and_detail(force_robotics)
 
     def _set_workspace(self, target: str, reason: Optional[str] = None) -> None:
         workspace = (target or "").strip().lower()

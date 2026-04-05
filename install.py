@@ -193,12 +193,15 @@ def compile_script(script_path: Path, exe_name: str, python_exe: str | None = No
         subprocess.run([python_cmd, "-m", "pip", "install", "pyinstaller"], check=True)
 
     dist_dir = REPO_ROOT / "dist"
+    src_dir = REPO_ROOT / "src"
     cmd = [
         python_cmd,
         "-m",
         "PyInstaller",
         "--onefile",
         "--noconsole",
+        "--paths",
+        str(src_dir),
         "--distpath",
         str(dist_dir),
         "--specpath",
@@ -208,7 +211,16 @@ def compile_script(script_path: Path, exe_name: str, python_exe: str | None = No
         str(script_path),
     ]
 
-    subprocess.run(cmd, cwd=str(REPO_ROOT))
+    result = subprocess.run(cmd, cwd=str(REPO_ROOT), capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"[-] Compilation failed for {script_path} (exit code {result.returncode}).")
+        stderr = str(result.stderr or "").strip()
+        stdout = str(result.stdout or "").strip()
+        if stderr:
+            print(stderr)
+        elif stdout:
+            print(stdout)
+        return None
 
     exe_path = dist_dir / exe_name
     if exe_path.exists():

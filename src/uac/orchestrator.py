@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import argparse
+import json
 import os
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ctypes import wintypes
 
 import ctypes
@@ -27,6 +31,17 @@ TOKEN_PRIMARY = 1
 CLAIM_TTL_SECONDS = 120.0
 
 DEBUG_LOG = str(ensure_ipc_root() / "orchestrator.log")
+
+
+def _api_host() -> str:
+    return str(getattr(Config, "UAC_ORCHESTRATOR_API_HOST", "127.0.0.1") or "127.0.0.1").strip() or "127.0.0.1"
+
+
+def _api_port() -> int:
+    try:
+        return int(getattr(Config, "UAC_ORCHESTRATOR_API_PORT", 8779) or 8779)
+    except Exception:
+        return 8779
 
 
 def log_debug(message: str) -> None:
@@ -146,7 +161,42 @@ def get_winlogon_pid(session_id: int) -> int | None:
     return found_pid
 
 
-def inject_agent_to_winlogon(session_id: int, request_path: str) -> bool:
+def _build_agent_command(*, base_path: str, request_path: str | None = None, decision: str | None = None) -> str | None:
+    clean_decision = str(decision or "").strip().upper()
+    request = str(request_path or "").strip()
+    if clean_decision and clean_decision not in {"ALLOW", "DENY"}:
+        return None
+    if not clean_decision and not request:
+        return None
+
+    agent_exe = os.path.join(base_path, "dist", "agent.exe")
+    decision_arg = f'--decision "{clean_decision}"' if clean_decision else ""
+    request_arg = f'--request "{request}"' if request else ""
+    arg_fragment = decision_arg or request_arg
+
+    if os.path.exists(agent_exe):
+        cmd_line = f'"{agent_exe}" {arg_fragment}'.strip()
+        log_debug(f"Launching compiled agent: {cmd_line}")
+        return cmd_line
+
+    agent_script = os.path.join(base_path, "agent.py")
+    python_exe = (
+        sys.executable
+        if not getattr(sys, "frozen", False)
+        else os.path.join(base_path, "venv", "Scripts", "python.exe")
+    )
+    if not os.path.exists(python_exe):
+        python_exe = "python.exe"
+    cmd_line = f'"{python_exe}" "{agent_script}" {arg_fragment}'.strip()
+    log_debug(f"Launching with Python: {cmd_line}")
+    return cmd_line
+
+
+def inject_agent_to_winlogon(
+    session_id: int,
+    request_path: str | None = None,
+    decision: str | None = None,
+) -> bool:
     winlogon_pid = get_winlogon_pid(session_id)
     if not winlogon_pid:
         log_debug(f"Could not find winlogon for session {session_id}")
@@ -173,18 +223,14 @@ def inject_agent_to_winlogon(session_id: int, request_path: str) -> bool:
         return False
 
     base_path = get_base_path()
-    agent_exe = os.path.join(base_path, "dist", "agent.exe")
-
-    if os.path.exists(agent_exe):
-        cmd_line = f'"{agent_exe}" --request "{request_path}"'
-        log_debug(f"Launching compiled agent: {cmd_line}")
-    else:
-        agent_script = os.path.join(base_path, "agent.py")
-        python_exe = sys.executable if not getattr(sys, "frozen", False) else os.path.join(base_path, "venv", "Scripts", "python.exe")
-        if not os.path.exists(python_exe):
-            python_exe = "python.exe"
-        cmd_line = f'"{python_exe}" "{agent_script}" --request "{request_path}"'
-        log_debug(f"Launching with Python: {cmd_line}")
+    cmd_line = _build_agent_command(
+        base_path=base_path,
+        request_path=request_path,
+        decision=decision,
+    )
+    if not cmd_line:
+        log_debug("Cannot launch agent: missing request path or decision.")
+        return False
 
     startup = STARTUPINFO()
     startup.cb = ctypes.sizeof(STARTUPINFO)
@@ -213,10 +259,111 @@ def inject_agent_to_winlogon(session_id: int, request_path: str) -> bool:
     return False
 
 
+def dispatch_decision_to_secure_desktop(decision: str, *, session_id: int | None = None) -> bool:
+    clean = str(decision or "").strip().upper()
+    if clean not in {"ALLOW", "DENY"}:
+        log_debug(f"Invalid decision requested: {decision}")
+        return False
+
+    if session_id is None:
+        session_id = int(kernel32.WTSGetActiveConsoleSessionId())
+    if int(session_id) == 0xFFFFFFFF:
+        log_debug("No active console session while dispatching UAC decision")
+        return False
+
+    return inject_agent_to_winlogon(int(session_id), decision=clean)
+
+
+class _OrchestratorApiHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, _format: str, *_args) -> None:
+        return
+
+    def _write_json(self, code: int, payload: dict[str, object]) -> None:
+        body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/health":
+            self._write_json(200, {"ok": True, "service": "uac-orchestrator"})
+            return
+        self._write_json(404, {"ok": False, "error": "not_found"})
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/uac/decision":
+            self._write_json(404, {"ok": False, "error": "not_found"})
+            return
+
+        try:
+            raw_length = int(self.headers.get("Content-Length", "0") or 0)
+        except Exception:
+            raw_length = 0
+        raw_body = self.rfile.read(max(0, raw_length)) if raw_length > 0 else b""
+        try:
+            payload = json.loads(raw_body.decode("utf-8", errors="replace") or "{}")
+        except Exception:
+            payload = {}
+
+        decision = str(payload.get("decision") or "").strip().upper()
+        if decision not in {"ALLOW", "DENY"}:
+            self._write_json(400, {"ok": False, "error": "invalid_decision"})
+            return
+
+        ok = dispatch_decision_to_secure_desktop(decision)
+        if ok:
+            self._write_json(200, {"ok": True, "decision": decision})
+            return
+
+        self._write_json(503, {"ok": False, "error": "dispatch_failed", "decision": decision})
+
+
+def _start_api_server() -> ThreadingHTTPServer | None:
+    host = _api_host()
+    port = _api_port()
+    try:
+        server = ThreadingHTTPServer((host, port), _OrchestratorApiHandler)
+    except Exception as exc:
+        log_debug(f"UAC orchestrator API server failed to start on {host}:{port}: {exc}")
+        return None
+
+    thread = threading.Thread(
+        target=server.serve_forever,
+        kwargs={"poll_interval": 0.5},
+        name="UacOrchestratorApi",
+        daemon=True,
+    )
+    thread.start()
+    log_debug(f"UAC orchestrator API listening on http://{host}:{port}")
+    return server
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--decision")
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
     log_debug("Orchestrator started")
     enable_privilege("SeDebugPrivilege")
     enable_privilege("SeTcbPrivilege")
+
+    one_shot_decision = str(getattr(args, "decision", "") or "").strip().upper()
+    if one_shot_decision:
+        ok = dispatch_decision_to_secure_desktop(one_shot_decision)
+        log_debug(
+            f"One-shot UAC decision dispatch {one_shot_decision}: {'ok' if ok else 'failed'}"
+        )
+        return
+
+    _start_api_server()
 
     claimed: dict[str, float] = {}
 

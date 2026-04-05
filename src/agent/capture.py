@@ -1,6 +1,5 @@
 import hashlib
 import os
-import shutil
 import time
 import cv2
 import PIL.Image
@@ -9,35 +8,12 @@ import PIL.ImageFont
 import pyautogui
 import mss
 import logging
-import json
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
 
-from backend_client import get_client
 from config import Config
 from tools.eye import LocalCVEye
-from agent.prompts import UAC_APPROVAL_PROMPT
-from uac.ipc import cleanup_request_artifacts, create_request, write_response
 
 logger = logging.getLogger("pixelpilot.capture")
-client = get_client()
-
-
-class _ModelWrapper:
-    def __init__(self, model_name: str):
-        self.model_name = model_name
-
-    def generate_content(self, contents, config=None):
-        logger.info("Waiting for AI response...")
-        return client.generate_content(
-            model=self.model_name,
-            contents=contents,
-            config=config,
-        )
-
-
-def _get_model():
-    return _ModelWrapper(Config.GEMINI_MODEL)
 
 
 def _create_reference_sheet(crops):
@@ -68,7 +44,7 @@ def _create_reference_sheet(crops):
 
 class ScreenCapture:
     """
-    Handles screen capture, UAC detection, and image analysis.
+    Handles screenshot capture and detailed visual analysis.
     """
     def __init__(self, agent_orchestrator):
         self.agent = agent_orchestrator
@@ -111,16 +87,6 @@ class ScreenCapture:
         current_hash = self._get_screen_hash(current_path)
         return current_hash != previous_hash
 
-    def _is_black_screen(self, image: PIL.Image.Image) -> bool:
-        """Check if the image is mostly black (UAC secure desktop symptom)."""
-        try:
-            extrema = image.convert("L").getextrema()
-            if extrema[1] < 20:
-                return True
-            return False
-        except Exception:
-            return False
-
     def _capture_raw_image(self) -> PIL.Image.Image:
         """
         Capture raw screen execution-style.
@@ -148,92 +114,6 @@ class ScreenCapture:
             pass
         return pyautogui.screenshot()
 
-    def _ask_uac_brain(self, image_path: str) -> dict[str, Any]:
-        """Ask the Brain specifically about a UAC prompt."""
-        fallback = {
-            "allow": False,
-            "reasoning": "Unable to verify the secure desktop prompt safely.",
-        }
-        try:
-            self.log("   [UAC] Asking AI for approval assessment...")
-
-            class UACApproval(BaseModel):
-                allow: bool = Field(description="Whether the elevation request should be allowed.")
-                reasoning: str = Field(
-                    description="Why this approval choice was made. Analyze the publisher and program name."
-                )
-
-            prompt = UAC_APPROVAL_PROMPT
-
-            def img_to_dict(img_obj):
-                import io
-                import base64
-                img_byte_arr = io.BytesIO()
-                img_obj.save(img_byte_arr, format="PNG")
-                return {
-                    "mime_type": "image/png",
-                    "data": base64.b64encode(img_byte_arr.getvalue()).decode("utf-8"),
-                }
-
-            model = _get_model()
-            img = PIL.Image.open(image_path)
-
-            contents = [{"role": "user", "parts": [{"text": prompt}, img_to_dict(img)]}]
-
-            response_data = model.generate_content(
-                contents,
-                config={
-                    "response_mime_type": "application/json",
-                    "response_json_schema": UACApproval.model_json_schema(),
-                },
-            )
-
-            try:
-                result = json.loads(response_data["text"])
-                allow = result.get("allow")
-                if not isinstance(allow, bool):
-                    return fallback
-                reasoning = result.get("reasoning", "No reasoning provided")
-                logger.info(f"UAC Reasoning: {reasoning}")
-
-                return {
-                    "allow": allow,
-                    "reasoning": str(reasoning or "").strip() or fallback["reasoning"],
-                }
-            except Exception:
-                return fallback
-
-        except Exception as e:
-            logger.error(f"UAC approval assessment failed: {e}")
-            fallback["reasoning"] = f"AI approval assessment failed: {e}"
-            return fallback
-
-    def _check_and_trigger_uac(self):
-        """
-        Create a one-shot UAC request for the orchestrator/helper pair.
-        """
-        try:
-            return create_request()
-        except Exception as e:
-            logger.error(f"Could not start UAC Orchestrator: {e}")
-            return None
-
-    def _confirm_uac_allow(self, reasoning: str) -> bool:
-        chat_window = getattr(self.agent, "chat_window", None)
-        if not chat_window or not hasattr(chat_window, "ask_confirmation"):
-            self.log("UAC confirmation unavailable in this session. Defaulting to DENY.")
-            return False
-
-        prompt = (
-            "Windows is asking for elevated access on the secure desktop.\n\n"
-            f"AI assessment:\n{str(reasoning or 'No reasoning provided.')}\n\n"
-            "Allow this elevation request?"
-        )
-        try:
-            return bool(chat_window.ask_confirmation("Approve Elevation", prompt))
-        except Exception as exc:
-            logger.error("Failed to collect UAC confirmation: %s", exc)
-            return False
 
     def _create_annotated_image(self, original_path, elements, output_path):
         """Draw Green IDs on the screenshot for Gemini."""
@@ -312,9 +192,13 @@ class ScreenCapture:
 
     def capture_screen(
         self, force_robotics: bool = False
-    ) -> tuple[List[Dict], Optional[Any]]:
+    ) -> Optional[str]:
         """
-        Capture and analyze the current screen.
+        Capture only a screenshot of the current screen.
+
+        Notes:
+        - This function intentionally does not perform element/logo/edge analysis.
+        - Use capture_and_detail for visual analysis overlays and IDs.
         """
         self.agent._ensure_workspace_active()
 
@@ -325,7 +209,7 @@ class ScreenCapture:
         self.progress("Taking screenshot...")
 
         max_retries = 3
-        capture_successful = False
+        screenshot_path: Optional[str] = None
 
         for attempt in range(max_retries):
             self.agent._check_stop()
@@ -371,108 +255,54 @@ class ScreenCapture:
 
                 self._last_hash = self._get_screen_hash(Config.SCREENSHOT_PATH)
 
-                if self._is_black_screen(full_img):
-                    raise Exception("Screen is black (likely Secure Desktop/UAC)")
-
                 time.sleep(Config.SCREENSHOT_DELAY)
 
                 if (
                     os.path.exists(Config.SCREENSHOT_PATH)
                     and os.path.getsize(Config.SCREENSHOT_PATH) > 0
                 ):
-                    capture_successful = True
+                    screenshot_path = Config.SCREENSHOT_PATH
                     break
 
             except Exception as e:
                 err_msg = str(e)
                 logger.warning(f"Screenshot attempt {attempt + 1} failed: {err_msg}")
-
-                if (
-                    "OpenInputDesktop failed" in err_msg
-                    or "screen grab failed" in err_msg
-                    or "Access is denied" in err_msg
-                    or "Screen is black" in err_msg
-                ):
-                    self.log(
-                        "UAC DETECTED: Standard screenshot failed. Initiating Orchestrator protocol..."
-                    )
-
-                    request_payload = self._check_and_trigger_uac()
-                    if not request_payload:
-                        time.sleep(Config.UAC_IPC_POLL_INTERVAL_SECONDS)
-                        continue
-
-                    self.log(
-                        "WAITING: allowing UAC Agent to run on Secure Desktop..."
-                    )
-
-                    uac_snap_path = str(request_payload.get("snapshot_path") or "").strip()
-                    found_snapshot = False
-                    max_checks = max(
-                        1,
-                        int(
-                            max(
-                                float(Config.UAC_IPC_POLL_INTERVAL_SECONDS),
-                                float(Config.UAC_RESPONSE_TIMEOUT_SECONDS),
-                            )
-                            / float(Config.UAC_IPC_POLL_INTERVAL_SECONDS)
-                        ),
-                    )
-                    for _ in range(max_checks):
-                        if uac_snap_path and os.path.exists(uac_snap_path):
-                            found_snapshot = True
-                            break
-                        time.sleep(Config.UAC_IPC_POLL_INTERVAL_SECONDS)
-
-                    if found_snapshot:
-                        self.log("Secure Desktop snapshot found!")
-                        try:
-                            self.agent._check_stop()
-                            assessment = self._ask_uac_brain(uac_snap_path)
-                            suggested_allow = bool(assessment.get("allow"))
-                            reasoning = str(assessment.get("reasoning") or "").strip()
-                            suggested_label = "ALLOW" if suggested_allow else "DENY"
-                            self.log(f"UAC ASSESSMENT: AI suggests {suggested_label}")
-
-                            user_confirmed = False
-                            final_allow = False
-                            if suggested_allow:
-                                user_confirmed = self._confirm_uac_allow(reasoning)
-                                final_allow = bool(user_confirmed)
-                            else:
-                                self.log("UAC ASSESSMENT: defaulting to DENY.")
-
-                            write_response(
-                                request_payload,
-                                allow=final_allow,
-                                user_confirmed=user_confirmed,
-                                reasoning=reasoning,
-                            )
-                            final_label = "ALLOW" if final_allow else "DENY"
-                            self.log(f"UAC RESPONSE: {final_label}")
-
-                            time.sleep(Config.UAC_CAPTURE_SETTLE_AFTER_RESPONSE_SECONDS)
-
-                            shutil.copy(uac_snap_path, Config.SCREENSHOT_PATH)
-                            capture_successful = True
-                            break
-                        except Exception as copy_err:
-                            logger.error(f"Failed during UAC handling: {copy_err}")
-                        finally:
-                            cleanup_request_artifacts(request_payload)
-                    else:
-                        logger.warning(
-                            "No UAC snapshot found. The Orchestrator may not have launched the agent."
-                        )
-                        cleanup_request_artifacts(request_payload)
-
-                time.sleep(Config.UAC_IPC_POLL_INTERVAL_SECONDS)
+                time.sleep(0.1)
 
         if self.agent.chat_window and self.agent.active_workspace == "user":
             self.agent.chat_window.restore_after_screenshot()
 
-        if not capture_successful or not os.path.exists(Config.SCREENSHOT_PATH):
+        if not screenshot_path or not os.path.exists(screenshot_path):
             logger.error("Could not capture screen after multiple attempts.")
+            return None
+
+        self.progress("Screenshot captured.")
+        return screenshot_path
+
+    def _create_edge_overlay(self, screenshot_path: str, output_path: str) -> None:
+        """Create a basic edge map overlay for detail captures."""
+        try:
+            image = cv2.imread(screenshot_path)
+            if image is None:
+                return
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            edges = cv2.Canny(gray, threshold1=80, threshold2=180)
+            edge_rgb = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
+            cv2.imwrite(output_path, edge_rgb)
+        except Exception as e:
+            logger.debug(f"Could not create edge overlay: {e}")
+
+    def capture_and_detail(
+        self, force_robotics: bool = False
+    ) -> tuple[List[Dict], Optional[Any]]:
+        """
+        Capture a screenshot and then run detailed visual analysis:
+        - Logo/icon-oriented element detection
+        - Element IDs and debug overlay
+        - Edge overlay map
+        """
+        screenshot_path = self.capture_screen(force_robotics=force_robotics)
+        if not screenshot_path:
             return [], None
 
         elements = []
@@ -480,7 +310,7 @@ class ScreenCapture:
 
         if not Config.USE_ROBOTICS_EYE or Config.LAZY_VISION:
             elements = self._safe_get_local_elements(
-                Config.SCREENSHOT_PATH,
+                screenshot_path,
                 progress_callback=self.progress,
             )
             vision_method = self.local_eye.current_vision_label()
@@ -520,7 +350,7 @@ class ScreenCapture:
 
             if self.agent.robotics_eye:
                 robo_elements = self._safe_get_robotics_elements(
-                    Config.SCREENSHOT_PATH, task_context, current_step
+                    screenshot_path, task_context, current_step
                 )
                 if robo_elements:
                     elements = robo_elements
@@ -529,7 +359,7 @@ class ScreenCapture:
                     logger.warning("Robotics-ER returned no usable elements. Falling back to OCR.")
                     if not elements:
                         elements = self._safe_get_local_elements(
-                            Config.SCREENSHOT_PATH,
+                            screenshot_path,
                             progress_callback=self.progress,
                         )
                         vision_method = f"{self.local_eye.current_vision_label()} (Fallback)"
@@ -537,20 +367,21 @@ class ScreenCapture:
                 logger.warning("Robotics Eye requested but not initialized. Falling back to OCR.")
                 if not elements:
                     elements = self._safe_get_local_elements(
-                        Config.SCREENSHOT_PATH,
+                        screenshot_path,
                         progress_callback=self.progress,
                     )
                     vision_method = f"{self.local_eye.current_vision_label()} (Fallback)"
 
         self._create_annotated_image(
-            Config.SCREENSHOT_PATH, elements, Config.DEBUG_PATH
+            screenshot_path, elements, Config.DEBUG_PATH
         )
+        self._create_edge_overlay(screenshot_path, Config.EDGE_PATH)
 
         reference_sheet = None
         if Config.ENABLE_REFERENCE_SHEET:
             try:
                 crops = self.local_eye.get_crops_for_context(
-                    Config.SCREENSHOT_PATH, elements
+                    screenshot_path, elements
                 )
                 reference_sheet = _create_reference_sheet(crops)
                 if reference_sheet and Config.SAVE_SCREENSHOTS:

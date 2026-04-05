@@ -25,6 +25,8 @@ from agent.prompts import (
     LIVE_SYSTEM_INSTRUCTION,
 )
 from config import Config, OperationMode
+from uac.detection import get_uac_prompt_state
+from uac.flow import get_uac_queue_gate, set_external_uac_mode
 from .broker import LiveActionBroker
 from .transports import (
     BaseLiveTransport,
@@ -80,6 +82,7 @@ class LiveSessionManager(QObject):
         self._mic_task: Optional[asyncio.Task] = None
         self._rotation_task: Optional[asyncio.Task] = None
         self._guidance_observer_task: Optional[asyncio.Task] = None
+        self._uac_watchdog_task: Optional[asyncio.Task] = None
         self._one_shot_timeout_task: Optional[asyncio.Task] = None
         self._one_shot_finalize_task: Optional[asyncio.Task] = None
         self._go_away_reconnect_task: Optional[asyncio.Task] = None
@@ -121,14 +124,20 @@ class LiveSessionManager(QObject):
         )
         self._thinking_level_override = ""
         self._last_successful_reasoning_escalation_level = ""
+        self._runtime_uac_mode_active = False
 
-        self.broker = LiveActionBroker(on_action_update=self._on_action_update)
+        self.broker = LiveActionBroker(
+            on_action_update=self._on_action_update,
+            wait_gate=self._uac_action_queue_gate,
+            on_waiting=self._on_action_waiting_note,
+        )
         self.tools = LiveToolRegistry(
             agent=agent,
             broker=self.broker,
             on_capture_ready=self._on_capture_ready,
             on_disconnect_requested=self._request_live_disconnect,
             on_reasoning_escalation=self._request_reasoning_escalation,
+            on_status_note=lambda message: self.status_received.emit(str(message)),
         )
         self.tools.set_guidance_mode(self._is_guidance_mode())
         self.availability_changed.emit(self.is_available, self.unavailable_reason)
@@ -139,6 +148,45 @@ class LiveSessionManager(QObject):
             return value.value
         enum_value = getattr(value, "value", value)
         return str(enum_value or "").strip().lower()
+
+    @staticmethod
+    def _uac_action_queue_gate() -> dict[str, Any]:
+        gate = get_uac_queue_gate()
+        if bool(gate.get("active")) and not str(gate.get("message") or "").strip():
+            gate["message"] = "UAC mode active. Waiting for orchestrator to resolve secure desktop prompt."
+        return gate
+
+    def _on_action_waiting_note(self, message: str) -> None:
+        clean = str(message or "").strip()
+        if clean:
+            self.status_received.emit(clean)
+
+    def _set_runtime_uac_mode(
+        self,
+        active: bool,
+        *,
+        source: str,
+        message: str = "",
+        prompt_state: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        is_active = bool(active)
+        prompt_payload = dict(prompt_state or {}) if isinstance(prompt_state, dict) else None
+        state = set_external_uac_mode(
+            is_active,
+            source=str(source or "live_session").strip() or "live_session",
+            message=str(message or ""),
+            prompt=prompt_payload,
+        )
+        previous = bool(self._runtime_uac_mode_active)
+        self._runtime_uac_mode_active = is_active
+        if previous != is_active:
+            logger.info(
+                "LIVE_UAC_MODE_SET active=%s source=%s message=%s",
+                is_active,
+                str(source or "live_session"),
+                self._truncate_log_text(state.get("message")),
+            )
+        return state
 
     def _is_guidance_mode(self, mode: Optional[object] = None) -> bool:
         return self._mode_key(mode) == OperationMode.GUIDE.value
@@ -1705,6 +1753,10 @@ class LiveSessionManager(QObject):
             )
             self._speaker_task = asyncio.create_task(self._speaker_loop())
             self._rotation_task = asyncio.create_task(self._rotation_loop())
+            if bool(getattr(Config, "LIVE_USE_INTERNAL_UAC_DETECTOR", False)):
+                self._uac_watchdog_task = asyncio.create_task(self._uac_watchdog_loop())
+            else:
+                self._uac_watchdog_task = None
             if self._is_guidance_mode():
                 self._last_guidance_snapshot_signature = ""
                 self._last_guidance_probe_sent_at = 0.0
@@ -1738,6 +1790,7 @@ class LiveSessionManager(QObject):
             self._receive_task,
             self._rotation_task,
             self._guidance_observer_task,
+            self._uac_watchdog_task,
             self._go_away_reconnect_task,
             self._connect_task,
         ]
@@ -1756,6 +1809,7 @@ class LiveSessionManager(QObject):
         self._receive_task = None
         self._rotation_task = None
         self._guidance_observer_task = None
+        self._uac_watchdog_task = None
         self._go_away_reconnect_task = None
         self._connect_task = None
         self._connect_in_progress = False
@@ -2142,6 +2196,94 @@ class LiveSessionManager(QObject):
         if str(status_message or "").strip():
             self.status_received.emit(str(status_message))
 
+    async def _uac_watchdog_loop(self) -> None:
+        poll_interval_s = max(
+            0.1,
+            float(
+                getattr(
+                    Config,
+                    "UAC_WATCHDOG_POLL_SECONDS",
+                    getattr(Config, "UAC_IPC_POLL_INTERVAL_SECONDS", 0.5),
+                )
+                or getattr(Config, "UAC_IPC_POLL_INTERVAL_SECONDS", 0.5)
+            ),
+        )
+        retry_cooldown_s = max(
+            0.25,
+            float(getattr(Config, "UAC_WATCHDOG_RETRY_COOLDOWN_SECONDS", 1.0) or 1.0),
+        )
+        next_attempt_at = 0.0
+
+        try:
+            while True:
+                await asyncio.sleep(poll_interval_s)
+
+                if self._shutdown_event.is_set() or not self.enabled:
+                    continue
+                if self._transport is None or self._reconnect_in_progress:
+                    continue
+
+                now = time.monotonic()
+                if now < next_attempt_at:
+                    continue
+
+                prompt_state = await asyncio.to_thread(get_uac_prompt_state)
+                if not bool(prompt_state.get("likelyPromptActive")):
+                    if self._runtime_uac_mode_active:
+                        self._set_runtime_uac_mode(
+                            False,
+                            source="live_watchdog",
+                            message="UAC mode cleared. Resuming queued actions.",
+                        )
+                    continue
+
+                self._set_runtime_uac_mode(
+                    True,
+                    source="live_watchdog",
+                    message="UAC mode active. Waiting for orchestrator to resolve secure desktop prompt.",
+                    prompt_state=prompt_state,
+                )
+
+                logger.info(
+                    "LIVE_UAC_WATCHDOG detected prompt=%s",
+                    self._serialize_log_value(prompt_state),
+                )
+                self.status_received.emit(
+                    "UAC prompt detected by always-on detector. Resolving secure-desktop decision..."
+                )
+
+                expected_intent = self._uac_expected_intent_summary()
+
+                result = await asyncio.to_thread(
+                    self.tools.handle_detected_uac_prompt,
+                    source="live_watchdog",
+                    expected_intent=expected_intent,
+                )
+                logger.info(
+                    "LIVE_UAC_WATCHDOG result=%s",
+                    self._serialize_log_value(result),
+                )
+
+                message = str(result.get("message") or "").strip() if isinstance(result, dict) else ""
+                if message:
+                    if bool(result.get("success")):
+                        self.status_received.emit(message)
+                    elif bool(result.get("handled")):
+                        self.error_received.emit(message)
+
+                if bool(result.get("success")):
+                    self._set_runtime_uac_mode(
+                        False,
+                        source="live_watchdog",
+                        message="UAC mode cleared. Resuming queued actions.",
+                    )
+
+                next_attempt_at = time.monotonic() + retry_cooldown_s
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("Live UAC watchdog loop stopped unexpectedly")
+
     async def _video_loop(self) -> None:
         transport = await self._ensure_session_with_retry()
         if not self._video_stream_enabled:
@@ -2149,9 +2291,18 @@ class LiveSessionManager(QObject):
         interval = max(0.5, 1.0 / max(1, Config.LIVE_VIDEO_FPS))
         try:
             while True:
-                frame = await asyncio.to_thread(self._capture_video_frame)
-                if frame is not None:
-                    await transport.send_video(frame, "image/jpeg")
+                try:
+                    frame = await asyncio.to_thread(self._capture_video_frame)
+                    if frame is not None:
+                        await transport.send_video(frame, "image/jpeg")
+                except Exception as exc:  # noqa: BLE001
+                    if self._is_secure_desktop_capture_error(exc):
+                        resumed = await self._pause_video_until_uac_clears()
+                        if resumed:
+                            await asyncio.sleep(interval)
+                            continue
+                        return
+                    raise
                 await asyncio.sleep(interval)
         except asyncio.CancelledError:
             raise
@@ -2166,6 +2317,92 @@ class LiveSessionManager(QObject):
                     await self._reconnect_with_resume()
                 return
             logger.debug("Live video loop stopped: %s", exc, exc_info=True)
+
+    @staticmethod
+    def _is_secure_desktop_capture_error(exc: Exception) -> bool:
+        message = str(exc or "").lower()
+        markers = (
+            "screen grab failed",
+            "openinputdesktop failed",
+            "access is denied",
+            "secure desktop",
+        )
+        return any(marker in message for marker in markers)
+
+    async def _pause_video_until_uac_clears(self) -> bool:
+        if not self.enabled or self._shutdown_event.is_set():
+            return False
+
+        self.status_received.emit("UAC prompt detected. Pausing live video stream until the prompt closes.")
+        logger.info("Live video loop paused because secure desktop/UAC is active.")
+
+        timeout_s = max(1.0, float(getattr(Config, "UAC_PROMPT_CLEAR_TIMEOUT_SECONDS", 20.0) or 20.0))
+        poll_interval_s = max(0.1, float(getattr(Config, "UAC_IPC_POLL_INTERVAL_SECONDS", 0.5) or 0.5))
+        auto_handle_enabled = bool(getattr(Config, "LIVE_UAC_VIDEO_PAUSE_AUTO_HANDLE", True))
+        handled_once = False
+        deadline = time.monotonic() + timeout_s
+
+        def _resume_after_clear(note: str) -> bool:
+            self._set_runtime_uac_mode(
+                False,
+                source="live_video_pause",
+                message="UAC mode cleared. Resuming queued actions.",
+            )
+            self.status_received.emit(note)
+            logger.info("Live video loop resumed after UAC prompt cleared.")
+            return True
+
+        while self.enabled and not self._shutdown_event.is_set():
+            prompt_state = await asyncio.to_thread(get_uac_prompt_state)
+            if not bool(prompt_state.get("likelyPromptActive")):
+                return _resume_after_clear("UAC prompt closed. Resuming live video stream.")
+
+            self._set_runtime_uac_mode(
+                True,
+                source="live_video_pause",
+                message="UAC mode active. Waiting for orchestrator to resolve secure desktop prompt.",
+                prompt_state=prompt_state,
+            )
+
+            if auto_handle_enabled and not handled_once:
+                handled_once = True
+                logger.info("LIVE_UAC_VIDEO_PAUSE fallback_handler=starting")
+                expected_intent = self._uac_expected_intent_summary()
+                result = await asyncio.to_thread(
+                    self.tools.handle_detected_uac_prompt,
+                    source="video_pause_fallback",
+                    expected_intent=expected_intent,
+                )
+                logger.info(
+                    "LIVE_UAC_VIDEO_PAUSE fallback_handler_result=%s",
+                    self._serialize_log_value(result),
+                )
+                message = str(result.get("message") or "").strip() if isinstance(result, dict) else ""
+                if message:
+                    if bool(result.get("success")):
+                        self.status_received.emit(message)
+                    elif bool(result.get("handled")):
+                        self.error_received.emit(message)
+
+                # The fallback handler can block while waiting for prompt resolution;
+                # re-check immediately so we do not misclassify a just-cleared prompt as timeout.
+                prompt_state = await asyncio.to_thread(get_uac_prompt_state)
+                if not bool(prompt_state.get("likelyPromptActive")):
+                    return _resume_after_clear("UAC prompt closed. Resuming live video stream.")
+
+            if time.monotonic() >= deadline:
+                prompt_state = await asyncio.to_thread(get_uac_prompt_state)
+                if not bool(prompt_state.get("likelyPromptActive")):
+                    return _resume_after_clear("UAC prompt closed. Resuming live video stream.")
+
+                self.error_received.emit(
+                    "UAC prompt did not clear before timeout. Video stream remains paused; audio/tools continue."
+                )
+                logger.warning("Live video loop timed out waiting for UAC prompt to clear.")
+                return False
+            await asyncio.sleep(poll_interval_s)
+
+        return False
 
     async def _microphone_loop(self) -> None:
         await self._ensure_session_with_retry()
@@ -2652,6 +2889,40 @@ class LiveSessionManager(QObject):
             if status:
                 return status
         return ""
+
+    def _uac_expected_intent_summary(self) -> str:
+        parts: list[str] = []
+
+        goal = str(self._current_goal or "").strip()
+        if goal:
+            parts.append(f"goal={goal}")
+
+        current_action = self.broker.current_action_payload()
+        if isinstance(current_action, dict):
+            action_name = str(current_action.get("name") or "").strip()
+            action_status = str(current_action.get("status") or "").strip().lower()
+            action_args = current_action.get("args")
+            if action_name:
+                parts.append(f"action={action_name}")
+            if action_status:
+                parts.append(f"action_status={action_status}")
+            if isinstance(action_args, dict) and action_args:
+                try:
+                    parts.append(f"action_args={json.dumps(action_args, ensure_ascii=True)}")
+                except Exception:
+                    parts.append("action_args=<unserializable>")
+
+        recent_summary = self._latest_reconnect_action_summary(self._recent_action_updates)
+        if recent_summary:
+            parts.append(f"recent={recent_summary}")
+
+        if not parts:
+            return "No active intent context available from live runtime."
+
+        summary = " | ".join(parts)
+        if len(summary) > 900:
+            summary = summary[:897] + "..."
+        return summary
 
     @staticmethod
     def _build_reconnect_prompt(
