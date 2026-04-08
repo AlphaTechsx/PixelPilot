@@ -8,6 +8,8 @@ import { AuroraBackground } from './components/AuroraBackground';
 
 const HomePage = lazy(() => import('./pages/HomePage').then((module) => ({ default: module.HomePage })));
 const DocsPage = lazy(() => import('./pages/DocsPage').then((module) => ({ default: module.DocsPage })));
+const AuthPage = lazy(() => import('./pages/AuthPage').then((module) => ({ default: module.AuthPage })));
+const AuthCompletePage = lazy(() => import('./pages/AuthCompletePage').then((module) => ({ default: module.AuthCompletePage })));
 
 function App() {
   return (
@@ -20,6 +22,9 @@ function App() {
           <Routes>
             <Route path="/" element={<HomePage />} />
             <Route path="/docs" element={<DocsPage />} />
+            <Route path="/auth/sign-in" element={<AuthPage mode="signin" />} />
+            <Route path="/auth/sign-up" element={<AuthPage mode="signup" />} />
+            <Route path="/auth/complete" element={<AuthCompletePage />} />
           </Routes>
         </Suspense>
       </BrowserRouter>

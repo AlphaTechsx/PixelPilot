@@ -77,6 +77,14 @@
         "msi"
       ]
     },
+    "protocols": [
+      {
+        "name": "PixelPilot Deep Link",
+        "schemes": [
+          "pixelpilot"
+        ]
+      }
+    ],
     "msi": {
       "oneClick": false,
       "perMachine": true,

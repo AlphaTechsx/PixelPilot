@@ -23,9 +23,9 @@
 }
 
 .terminal-window {
-    background: #0a0a0a;
-    border: 1px solid #222;
-    border-radius: 12px;
+    background: rgba(12, 18, 27, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 16px;
     max-width: 800px;
     margin: 0 auto;
     overflow: hidden;
@@ -33,7 +33,7 @@
 }
 
 .terminal-header {
-    background: #111;
+    background: rgba(255, 255, 255, 0.03);
     padding: 0.75rem 1rem;
     display: flex;
     align-items: center;
@@ -48,15 +48,15 @@
 }
 
 .red {
-    background: #ff5f57;
+    background: #6d7a88;
 }
 
 .yellow {
-    background: #febc2e;
+    background: #8d9aaa;
 }
 
 .green {
-    background: #28c840;
+    background: #4a8fd7;
 }
 
 .t-title {

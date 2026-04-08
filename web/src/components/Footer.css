@@ -1,5 +1,5 @@
 .big-footer {
-    background: #050505;
+    background: #06090d;
     padding: 10rem 0 4rem;
     border-top: 1px solid #111;
 }
@@ -31,7 +31,8 @@
 .scroll-top-btn {
     width: 6rem;
     height: 6rem;
-    background: var(--color-primary);
+    background: rgba(74, 143, 215, 0.14);
+    border: 1px solid rgba(124, 182, 240, 0.22);
     border-radius: 50%;
     display: flex;
     align-items: center;
@@ -44,6 +45,7 @@
 
 .scroll-top-btn:hover {
     transform: scale(1.1);
+    background: rgba(74, 143, 215, 0.24);
 }
 
 .footer-bottom {

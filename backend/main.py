@@ -3,12 +3,18 @@ import base64
 import binascii
 import json
 import logging
+import os
+import secrets
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+import httpx
 from pydantic import BaseModel
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo.errors import PyMongoError
 import redis.asyncio as redis
 import uvicorn
 import service
@@ -28,10 +34,12 @@ security = HTTPBearer(auto_error=False)
 
 GENERATION_ERROR_MESSAGE = "Generation failed"
 SERVICE_UNAVAILABLE_MESSAGE = "Service temporarily unavailable"
+AUTH_DATABASE_UNAVAILABLE_MESSAGE = "Authentication database is unavailable. Please try again shortly."
 WS_AUTH_TIMEOUT_SECONDS = 10
-REGISTRATION_DISABLED_MESSAGE = (
-    "Registration is disabled. Use the tester credentials provided to you."
-)
+GOOGLE_AUTH_BASE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+DESKTOP_FLOW_WEB_PATH = "/auth/complete"
 
 
 # Request/Response models
@@ -285,27 +293,54 @@ async def get_current_user(
 # ============ Auth Endpoints ============
 
 
+def _require_env(name: str) -> str:
+    value = str(os.getenv(name, "")).strip()
+    if not value:
+        raise HTTPException(status_code=503, detail=f"Missing required env var: {name}")
+    return value
+
+
+def _web_complete_redirect_url(code: str, state: str) -> str:
+    web_url = _require_env("WEB_URL").rstrip("/")
+    return f"{web_url}{DESKTOP_FLOW_WEB_PATH}#code={code}&state={state}"
+
+
+def _google_redirect_uri() -> str:
+    return _require_env("GOOGLE_REDIRECT_URI")
+
+
+def _google_client_id() -> str:
+    return _require_env("GOOGLE_CLIENT_ID")
+
+
+def _google_client_secret() -> str:
+    return _require_env("GOOGLE_CLIENT_SECRET")
+
+
 @app.post("/auth/register", response_model=auth.TokenResponse)
 async def register(
     request: auth.RegisterRequest,
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
-    """Disable public self-registration."""
-    # Temporarily disabled while the backend is public.
-    # try:
-    #     user = await auth.register_user(request.email, request.password, db)
-    #     token = auth.create_access_token(user["user_id"], user["email"])
-    #     return auth.TokenResponse(
-    #         access_token=token,
-    #         user_id=user["user_id"],
-    #         email=user["email"],
-    #     )
-    # except ValueError as e:
-    #     raise HTTPException(status_code=400, detail=str(e))
-    # except Exception as e:
-    #     logger.error(f"Registration error: {e}")
-    #     raise HTTPException(status_code=500, detail="Registration failed")
-    raise HTTPException(status_code=403, detail=REGISTRATION_DISABLED_MESSAGE)
+    try:
+        user = await auth.register_user(
+            request.email,
+            request.password,
+            db,
+            email_verified=False,
+        )
+        return auth.token_response_for_user(user["user_id"], user["email"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        logger.exception("Registration database error")
+        raise HTTPException(
+            status_code=503,
+            detail=AUTH_DATABASE_UNAVAILABLE_MESSAGE,
+        ) from exc
+    except Exception as exc:
+        logger.exception("Registration error")
+        raise HTTPException(status_code=500, detail="Registration failed") from exc
 
 
 @app.post("/auth/login", response_model=auth.TokenResponse)
@@ -314,22 +349,194 @@ async def login(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ):
     """Login and get access token."""
-    user = await auth.authenticate_user(request.email, request.password, db)
+    try:
+        user = await auth.authenticate_user(request.email, request.password, db)
+    except PyMongoError as exc:
+        logger.exception("Login database error")
+        raise HTTPException(
+            status_code=503,
+            detail=AUTH_DATABASE_UNAVAILABLE_MESSAGE,
+        ) from exc
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = auth.create_access_token(user["user_id"], user["email"])
-    return auth.TokenResponse(
-        access_token=token,
-        user_id=user["user_id"],
-        email=user["email"],
-    )
+    return auth.token_response_for_user(user["user_id"], user["email"])
 
 
 @app.get("/auth/me", response_model=auth.UserInfo)
 async def get_me(user: dict = Depends(get_current_user)):
     """Get current user info."""
     return auth.UserInfo(user_id=user["user_id"], email=user["email"])
+
+
+@app.post("/auth/desktop/issue-code", response_model=auth.DesktopCodeIssueResponse)
+async def issue_desktop_code(
+    request: auth.DesktopCodeIssueRequest,
+    user: dict = Depends(get_current_user),
+    redis_client: redis.Redis = Depends(get_redis),
+):
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE_MESSAGE)
+    state = str(request.state or "").strip()
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing desktop state")
+    return await auth.issue_desktop_code(
+        redis_client,
+        user_id=user["user_id"],
+        email=user["email"],
+        state=state,
+    )
+
+
+@app.post("/auth/desktop/redeem", response_model=auth.TokenResponse)
+async def redeem_desktop_code(
+    request: auth.DesktopCodeRedeemRequest,
+    redis_client: redis.Redis = Depends(get_redis),
+):
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE_MESSAGE)
+    token = await auth.redeem_desktop_code(
+        redis_client,
+        code=str(request.code or "").strip(),
+        state=str(request.state or "").strip(),
+    )
+    if token is None or not token.access_token:
+        raise HTTPException(status_code=400, detail="Invalid or expired desktop code")
+    return token
+
+
+@app.get("/auth/google/start", include_in_schema=False)
+async def google_start(
+    desktop_state: str,
+    mode: str = "signin",
+    redis_client: redis.Redis = Depends(get_redis),
+):
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE_MESSAGE)
+
+    normalized_mode = str(mode or "signin").strip().lower() or "signin"
+    if normalized_mode not in {"signin", "signup"}:
+        raise HTTPException(status_code=400, detail="Invalid auth mode")
+
+    code_verifier, code_challenge = auth.create_pkce_pair()
+    oauth_state = secrets.token_urlsafe(24)
+    await auth.store_google_oauth_state(
+        redis_client,
+        state=oauth_state,
+        code_verifier=code_verifier,
+        desktop_state=str(desktop_state or "").strip(),
+        mode=normalized_mode,
+    )
+
+    params = urlencode(
+        {
+            "client_id": _google_client_id(),
+            "redirect_uri": _google_redirect_uri(),
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": oauth_state,
+            "code_challenge": code_challenge,
+            "code_challenge_method": "S256",
+            "access_type": "offline",
+            "prompt": "consent" if normalized_mode == "signup" else "select_account",
+        }
+    )
+    return RedirectResponse(f"{GOOGLE_AUTH_BASE_URL}?{params}")
+
+
+@app.get("/auth/google/callback", include_in_schema=False)
+async def google_callback(
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+    db: AsyncIOMotorDatabase = Depends(get_db),
+    redis_client: redis.Redis = Depends(get_redis),
+):
+    if error:
+        raise HTTPException(status_code=400, detail=f"Google OAuth failed: {error}")
+    if not code or not state:
+        raise HTTPException(status_code=400, detail="Missing Google OAuth code or state")
+    if redis_client is None:
+        raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE_MESSAGE)
+
+    stored_state = await auth.pop_google_oauth_state(redis_client, state)
+    if not stored_state:
+        raise HTTPException(status_code=400, detail="Google OAuth state expired")
+
+    token_payload = {
+        "client_id": _google_client_id(),
+        "client_secret": _google_client_secret(),
+        "code": code,
+        "code_verifier": str(stored_state.get("code_verifier") or ""),
+        "grant_type": "authorization_code",
+        "redirect_uri": _google_redirect_uri(),
+    }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        token_response = await client.post(GOOGLE_TOKEN_URL, data=token_payload)
+        try:
+            token_response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.exception("Google token exchange failed")
+            raise HTTPException(status_code=400, detail="Google token exchange failed") from exc
+        tokens = token_response.json()
+
+        access_token = str(tokens.get("access_token") or "").strip()
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Google access token missing")
+
+        userinfo_response = await client.get(
+            GOOGLE_USERINFO_URL,
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        try:
+            userinfo_response.raise_for_status()
+        except httpx.HTTPError as exc:
+            logger.exception("Google userinfo request failed")
+            raise HTTPException(status_code=400, detail="Google user profile request failed") from exc
+        profile = dict(userinfo_response.json() or {})
+
+    email = str(profile.get("email") or "").strip().lower()
+    email_verified = bool(profile.get("email_verified"))
+    provider_subject = str(profile.get("sub") or "").strip()
+    if not email or not email_verified:
+        raise HTTPException(status_code=400, detail="Google account must include a verified email")
+
+    try:
+        user = await auth.find_or_create_oauth_user(
+            provider="google",
+            provider_subject=provider_subject,
+            email=email,
+            email_verified=email_verified,
+            profile=profile,
+            db=db,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except PyMongoError as exc:
+        logger.exception("Google OAuth database error")
+        raise HTTPException(
+            status_code=503,
+            detail=AUTH_DATABASE_UNAVAILABLE_MESSAGE,
+        ) from exc
+
+    code_response = await auth.issue_desktop_code(
+        redis_client,
+        user_id=user["user_id"],
+        email=user["email"],
+        state=str(stored_state.get("desktop_state") or ""),
+    )
+    return RedirectResponse(
+        _web_complete_redirect_url(
+            code_response.code,
+            str(stored_state.get("desktop_state") or ""),
+        )
+    )
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon() -> Response:
+    return Response(status_code=204)
 
 
 # ============ Generation Endpoint (Protected) ============

@@ -1,5 +1,7 @@
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import { RuntimeBridgeClient } from './bridge-client.js';
+import { findDeepLinkArg, parsePixelPilotDeepLink, PIXELPILOT_PROTOCOL, type PixelPilotDeepLinkPayload } from './deep-link.js';
 import { RuntimeProcessManager } from './runtime-process.js';
 import { StartupDefaultsStore } from './startup-defaults.js';
 import { WindowManager } from './window-manager.js';
@@ -7,6 +9,22 @@ import type { BridgeStatus, RuntimeEventEnvelope } from '../shared/types.js';
 
 const require = createRequire(import.meta.url);
 const { app } = require('electron') as typeof import('electron');
+
+function registerProtocolHandler(): void {
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient(
+        PIXELPILOT_PROTOCOL,
+        process.execPath,
+        [path.resolve(process.argv[1] ?? '')]
+      );
+    }
+    return;
+  }
+  app.setAsDefaultProtocolClient(PIXELPILOT_PROTOCOL);
+}
+
+registerProtocolHandler();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
@@ -27,6 +45,7 @@ let runtimeBridgeEndpoints: { controlUrl: string; sidecarUrl: string } | null = 
 let bridgeStatus: BridgeStatus = 'starting';
 let bridgeStatusMessage = 'Starting runtime...';
 let hasConnectedBridge = false;
+let pendingDeepLink: PixelPilotDeepLinkPayload | null = parsePixelPilotDeepLink(findDeepLinkArg(process.argv) ?? '');
 
 const BRIDGE_RECOVERY_GRACE_MS = 8000;
 const BRIDGE_COMMAND_TIMEOUT_MS = 10000;
@@ -366,6 +385,43 @@ async function bootstrap(): Promise<void> {
   setBridgeStatus('starting');
   windowManager.createWindows();
   await beginBridgeClientStart({ reuseRuntime: false });
+  void processPendingDeepLink();
+}
+
+function surfaceDeepLinkError(message: string): void {
+  windowManager?.broadcastEvent({
+    id: crypto.randomUUID(),
+    kind: 'error',
+    method: 'runtime.error',
+    payload: { message },
+    protocolVersion: 1
+  });
+}
+
+async function processPendingDeepLink(): Promise<void> {
+  if (!pendingDeepLink) {
+    return;
+  }
+
+  const payload = pendingDeepLink;
+  try {
+    await invokeRuntimeFromMain('auth.exchangeDesktopCode', payload);
+    pendingDeepLink = null;
+    void invokeRuntimeFromMain('shell.setBackgroundHidden', { hidden: false }).catch(() => undefined);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Desktop sign-in failed.';
+    console.error('Failed to redeem desktop auth deep link.', error);
+    surfaceDeepLinkError(message);
+  }
+}
+
+function queueDeepLink(rawUrl: string | null): void {
+  const parsed = parsePixelPilotDeepLink(String(rawUrl || ''));
+  if (!parsed) {
+    return;
+  }
+  pendingDeepLink = parsed;
+  void processPendingDeepLink();
 }
 
 app.whenReady().then(() => {
@@ -392,6 +448,7 @@ app.on('before-quit', () => {
   runtimeBridgeEndpoints = null;
 });
 
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  queueDeepLink(findDeepLinkArg(argv));
   void invokeRuntimeFromMain('shell.setBackgroundHidden', { hidden: false }).catch(() => undefined);
 });

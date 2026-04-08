@@ -57,7 +57,7 @@ export const Navbar = () => {
                         <Link to="/docs" className="nav-link">Docs</Link>
                     </Magnetic>
                     <Magnetic>
-                        <a href="https://github.com/dagemawinegash/Pixel-Pilot-Project" target="_blank" rel="noreferrer" className="nav-link">GitHub</a>
+                        <a href="https://github.com/AlphaTechsx/PixelPilot" target="_blank" rel="noreferrer" className="nav-link">GitHub</a>
                     </Magnetic>
                 </div>
             </motion.nav>

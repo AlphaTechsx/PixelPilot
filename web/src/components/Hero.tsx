@@ -41,15 +41,15 @@ export const Hero = () => {
                     className="hero-description-wrapper"
                 >
                     <p className="hero-desc">
-                        The visual home for PixelPilot, a Windows automation agent powered by <span className="text-brand-gradient">Gemini</span>.
+                        The control surface for PixelPilot, a Windows automation agent powered by Gemini Live.
                         <br />
-                        Explore capabilities, workflows, and architecture in one place.
+                        Explore the runtime, browser-first account flow, and desktop automation model in one place.
                     </p>
 
                     <div className="hero-actions">
                         <Magnetic strength={0.3}>
                             <button className="btn-mag-primary" onClick={scrollToQuickStart}>
-                                Explore Website
+                                Explore PixelPilot
                             </button>
                         </Magnetic>
                     </div>

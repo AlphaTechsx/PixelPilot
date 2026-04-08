@@ -46,6 +46,15 @@ def save_api_key(value: str) -> dict[str, Any]:
     return get_auth_state()
 
 
+def start_browser_flow(mode: str) -> dict[str, Any]:
+    return get_auth_manager().start_browser_flow(mode)
+
+
+def exchange_desktop_code(code: str, state: str = "") -> dict[str, Any]:
+    get_auth_manager().exchange_desktop_code(code, state or None)
+    return get_auth_state()
+
+
 def logout_all() -> dict[str, Any]:
     Config.clear_api_key()
     get_auth_manager().logout()

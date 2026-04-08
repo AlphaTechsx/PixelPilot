@@ -2,17 +2,17 @@
 
 :root {
   /* Brand Colors */
-  --color-primary: #f86f03;
-  --color-secondary: #22c7d6;
-  --color-accent: #fbbf24;
+  --color-primary: #4a8fd7;
+  --color-secondary: #7cb6f0;
+  --color-accent: #d7e5f5;
 
   /* Backgrounds */
-  --color-bg: #090705;
-  --color-surface: #11100c;
+  --color-bg: #080b10;
+  --color-surface: #10161f;
 
   /* Text */
-  --color-text: #ffffff;
-  --color-text-muted: #888888;
+  --color-text: #f5f8fc;
+  --color-text-muted: #96a3b4;
 
   /* Typography */
   --font-sans: 'Manrope', sans-serif;
@@ -48,10 +48,8 @@ html {
 
 body {
   min-height: 100vh;
-  background:
-    radial-gradient(60rem 40rem at 10% -10%, rgba(248, 111, 3, 0.18), transparent 60%),
-    radial-gradient(48rem 30rem at 85% 0%, rgba(34, 199, 214, 0.16), transparent 58%),
-    linear-gradient(180deg, #0d0906 0%, #080604 100%);
+  background: #080b10;
+  color: var(--color-text);
   -webkit-font-smoothing: antialiased;
 }
 
@@ -85,16 +83,9 @@ body {
   padding: 0 2rem;
 }
 
-.text-gradient {
-  background: linear-gradient(135deg, #fff 0%, #888 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
+.text-gradient,
 .text-brand-gradient {
-  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--color-text);
 }
 
 /* Noise Texture Overlay */

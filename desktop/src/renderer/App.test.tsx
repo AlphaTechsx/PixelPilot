@@ -94,6 +94,7 @@ function makeSnapshot(overrides: Partial<RuntimeSnapshot> = {}): RuntimeSnapshot
 function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
   getStartupDefaults: ReturnType<typeof vi.fn>;
   invokeRuntime: ReturnType<typeof vi.fn>;
+  openExternal: ReturnType<typeof vi.fn>;
   setBackgroundHidden: ReturnType<typeof vi.fn>;
   setTrayOnly: ReturnType<typeof vi.fn>;
   setExpanded: ReturnType<typeof vi.fn>;
@@ -114,6 +115,7 @@ function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
   let sidecarListener: Listener<SidecarFrame> | null = null;
 
   const invokeRuntime = vi.fn().mockResolvedValue({});
+  const openExternal = vi.fn().mockResolvedValue(undefined);
   const getStartupDefaults = vi.fn().mockResolvedValue({
     operationMode: (snapshot?.operationMode || 'AUTO').toUpperCase(),
     visionMode: (snapshot?.visionMode || 'OCR').toUpperCase(),
@@ -140,6 +142,7 @@ function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
     getSnapshot: vi.fn().mockResolvedValue(snapshot),
     getStartupDefaults,
     invokeRuntime,
+    openExternal,
     setExpanded,
     setBackgroundHidden,
     setTrayOnly,
@@ -183,6 +186,7 @@ function setupApi(windowKind: WindowKind, snapshot: RuntimeSnapshot | null): {
   return {
     getStartupDefaults,
     invokeRuntime,
+    openExternal,
     setBackgroundHidden,
     setTrayOnly,
     setExpanded,
@@ -256,7 +260,37 @@ describe('Electron renderer App', () => {
     });
   });
 
-  it('submits account login from the auth gate and can quit the app', async () => {
+  it('starts browser sign-in from the auth gate', async () => {
+    const controls = setupApi(
+      'overlay',
+      makeSnapshot({
+        auth: {
+          signedIn: false,
+          directApi: false,
+          email: '',
+          userId: '',
+          backendUrl: 'http://localhost:8000',
+          hasApiKey: false,
+          needsAuth: true
+        }
+      })
+    );
+
+    controls.invokeRuntime.mockResolvedValueOnce({ authUrl: 'https://example.com/auth/sign-in?desktop_state=abc' });
+
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole('button', { name: /sign in in browser/i }));
+
+    await waitFor(() => {
+      expect(controls.invokeRuntime).toHaveBeenCalledWith('auth.startBrowserFlow', {
+        mode: 'signin'
+      });
+      expect(controls.openExternal).toHaveBeenCalledWith('https://example.com/auth/sign-in?desktop_state=abc');
+    });
+  });
+
+  it('submits a browser code from the auth gate and can quit the app', async () => {
     const controls = setupApi(
       'overlay',
       makeSnapshot({
@@ -274,15 +308,13 @@ describe('Electron renderer App', () => {
 
     render(<App />);
 
-    await userEvent.type(await screen.findByPlaceholderText(/enter your email/i), 'dev@example.com');
-    await userEvent.type(screen.getByPlaceholderText(/enter your password/i), 'secret');
-    await userEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+    await userEvent.type(await screen.findByPlaceholderText(/enter browser code/i), 'code-123');
+    await userEvent.click(screen.getByRole('button', { name: /continue with browser code/i }));
     await userEvent.click(screen.getByRole('button', { name: /close login dialog/i }));
 
     await waitFor(() => {
-      expect(controls.invokeRuntime).toHaveBeenCalledWith('auth.login', {
-        email: 'dev@example.com',
-        password: 'secret'
+      expect(controls.invokeRuntime).toHaveBeenCalledWith('auth.exchangeDesktopCode', {
+        code: 'code-123'
       });
       expect(controls.quitApp).toHaveBeenCalled();
     });

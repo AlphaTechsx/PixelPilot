@@ -21,7 +21,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const require = createRequire(import.meta.url);
 const electron = require('electron') as typeof import('electron');
-const { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen } = electron;
+const { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen, shell } = electron;
 
 type InvokeRuntime = (method: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>;
 
@@ -256,6 +256,11 @@ export class WindowManager {
     );
     ipcMain.handle('pixelpilot:invoke-runtime', (_event, method: string, payload?: Record<string, unknown>) =>
       this.wrapIpcResult(() => this.invokeRuntime(method, payload))
+    );
+    ipcMain.handle('pixelpilot:open-external', (_event, url: string) =>
+      this.wrapIpcResult(async () => {
+        await shell.openExternal(String(url || ''));
+      })
     );
     ipcMain.handle('pixelpilot:set-expanded', (_event, expanded: boolean) =>
       this.wrapIpcResult(() => this.setExpanded(Boolean(expanded)))

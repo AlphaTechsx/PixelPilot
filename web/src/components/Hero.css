@@ -9,6 +9,17 @@
     padding-top: 5vh;
 }
 
+.hero-container::before {
+    content: '';
+    position: absolute;
+    inset: 12% 12% auto;
+    height: 18rem;
+    border-radius: 999px;
+    background: radial-gradient(circle, rgba(74, 143, 215, 0.14), transparent 70%);
+    filter: blur(40px);
+    pointer-events: none;
+}
+
 .hero-header {
     display: flex;
     flex-direction: column;
@@ -28,7 +39,7 @@
 
 .hero-title.outline {
     color: transparent;
-    -webkit-text-stroke: 2px rgba(255, 255, 255, 0.4);
+    -webkit-text-stroke: 2px rgba(124, 182, 240, 0.28);
 }
 
 .hero-description-wrapper {
@@ -48,9 +59,9 @@
 }
 
 .btn-mag-primary {
-    background: var(--color-text);
-    color: var(--color-bg);
-    border: none;
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--color-text);
+    border: 1px solid rgba(124, 182, 240, 0.22);
     padding: 1.25rem 3rem;
     border-radius: 999px;
     font-size: 1rem;
@@ -58,11 +69,13 @@
     cursor: pointer;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    transition: transform 0.2s ease;
+    transition: transform 0.2s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 .btn-mag-primary:hover {
     transform: scale(1.05);
+    background: rgba(124, 182, 240, 0.08);
+    border-color: rgba(124, 182, 240, 0.35);
 }
 
 .scroll-indicator {
@@ -81,5 +94,5 @@
 
 .scroll-line {
     width: 1px;
-    background: var(--color-primary);
+    background: rgba(124, 182, 240, 0.7);
 }

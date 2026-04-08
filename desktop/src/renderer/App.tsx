@@ -1419,51 +1419,62 @@ function StartupDefaultsSection({
 function AuthGate({
   auth,
   runtimeError,
-  onLogin,
+  onStartBrowserFlow,
+  onExchangeCode,
   onUseApiKey,
   onQuit
 }: {
   auth: AuthState;
   runtimeError: string;
-  onLogin: (email: string, password: string) => Promise<void>;
+  onStartBrowserFlow: (mode: 'signin' | 'signup') => Promise<void>;
+  onExchangeCode: (code: string) => Promise<void>;
   onUseApiKey: (apiKey: string) => Promise<void>;
   onQuit: () => Promise<void>;
 }): React.JSX.Element {
-  const [email, setEmail] = useState(auth.email);
-  const [password, setPassword] = useState('');
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const [browserCode, setBrowserCode] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState('');
   const [statusText, setStatusText] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
-  useWindowLayout({
+  useMeasuredWindowLayout(cardRef, {
     width: 420,
-    height: 700
+    height: 940
   });
 
-  useEffect(() => {
-    if (auth.email && !email) {
-      setEmail(auth.email);
+  const startBrowser = async (mode: 'signin' | 'signup') => {
+    setSubmitting(true);
+    setLocalError('');
+    setStatusText(mode === 'signup' ? 'Opening browser for account creation...' : 'Opening browser for sign-in...');
+    setStatusIsError(false);
+    try {
+      await onStartBrowserFlow(mode);
+    } catch (error) {
+      setLocalError(error instanceof Error ? error.message : 'Browser sign-in failed.');
+      setStatusText('');
+    } finally {
+      setSubmitting(false);
     }
-  }, [auth.email, email]);
+  };
 
-  const submitAccount = async (event: FormEvent<HTMLFormElement>) => {
+  const submitBrowserCode = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!email.trim() || !password) {
+    if (!browserCode.trim()) {
       setLocalError('');
-      setStatusText('Please enter email and password');
+      setStatusText('Please enter the browser code');
       setStatusIsError(true);
       return;
     }
     setSubmitting(true);
     setLocalError('');
-    setStatusText('Signing in...');
+    setStatusText('Completing sign-in...');
     setStatusIsError(false);
     try {
-      await onLogin(email, password);
-      setPassword('');
+      await onExchangeCode(browserCode);
+      setBrowserCode('');
     } catch (error) {
-      setLocalError(error instanceof Error ? error.message : 'Sign-in failed.');
+      setLocalError(error instanceof Error ? error.message : 'Code exchange failed.');
       setStatusText('');
     } finally {
       setSubmitting(false);
@@ -1515,7 +1526,10 @@ function AuthGate({
       initial={{ opacity: 0, y: -12 }}
       animate={{ opacity: 1, y: 0 }}
     >
-      <div className="drag-region relative overflow-hidden rounded-2xl border border-[rgba(52,78,102,0.72)] bg-[rgba(18,30,44,0.96)] px-8 pb-8 pt-7 shadow-[0_24px_70px_rgba(3,10,18,0.45)]">
+      <div
+        ref={cardRef}
+        className="drag-region relative overflow-hidden rounded-2xl border border-[rgba(52,78,102,0.72)] bg-[rgba(18,30,44,0.96)] px-8 pb-8 pt-7 shadow-[0_24px_70px_rgba(3,10,18,0.45)]"
+      >
         <button
           type="button"
           aria-label="Close login dialog"
@@ -1534,48 +1548,53 @@ function AuthGate({
         <div className="mt-4 text-center">
           <h1 className="text-[22px] font-bold tracking-[0.01em] text-[#cfe9ff]">Welcome Back</h1>
           <p className="mx-auto mt-3 max-w-[270px] text-[12px] leading-5 text-[rgba(207,233,255,0.6)]">
-            Sign in with the tester credentials you were given
+            Sign in or create your account in the browser, then return here automatically.
           </p>
         </div>
 
-        <form className="mt-8 grid gap-0" onSubmit={(event) => void submitAccount(event)}>
-          <label className="mb-2 text-[11px] font-semibold tracking-[0.03em] text-[rgba(207,233,255,0.8)]">
-            Email
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="Enter your email"
-            className="no-drag mb-4 min-h-[42px] rounded-[10px] border border-[rgba(52,78,102,0.72)] bg-[rgba(20,36,54,0.78)] px-3.5 py-2.5 text-[13px] text-[#e5f3ff] outline-none transition placeholder:text-[rgba(207,233,255,0.4)] focus:border-[#057FCA]"
-          />
+        <div className="mt-8 grid gap-3">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void startBrowser('signin')}
+            className="no-drag mt-6 min-h-[44px] rounded-[10px] border border-[#5fa6e8] bg-[#3e80c4] px-4 py-3 text-[13px] font-bold tracking-[0.04em] text-white transition hover:bg-[#4a8fd7] disabled:opacity-45"
+          >
+            {submitting ? 'Opening Browser...' : 'Sign In In Browser'}
+          </button>
 
-          <label className="mb-2 text-[11px] font-semibold tracking-[0.03em] text-[rgba(207,233,255,0.8)]">
-            Password
-          </label>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => void startBrowser('signup')}
+            className="no-drag min-h-[44px] rounded-[10px] border border-[rgba(52,78,102,0.72)] bg-transparent px-4 py-3 text-[12px] font-semibold text-[#cfe9ff] transition hover:border-[#057FCA] hover:bg-[rgba(52,78,102,0.32)] disabled:opacity-45"
+          >
+            Create Account In Browser
+          </button>
+        </div>
+
+        <div className="mt-7 text-center text-[11px] text-[rgba(207,233,255,0.5)]">
+          If the browser does not return here automatically, paste the one-time browser code.
+        </div>
+
+        <form className="mt-3 grid gap-3" onSubmit={(event) => void submitBrowserCode(event)}>
           <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="Enter your password"
+            type="text"
+            value={browserCode}
+            onChange={(event) => setBrowserCode(event.target.value)}
+            placeholder="Enter browser code"
             className="no-drag min-h-[42px] rounded-[10px] border border-[rgba(52,78,102,0.72)] bg-[rgba(20,36,54,0.78)] px-3.5 py-2.5 text-[13px] text-[#e5f3ff] outline-none transition placeholder:text-[rgba(207,233,255,0.4)] focus:border-[#057FCA]"
           />
-
           <button
             type="submit"
             disabled={submitting}
-            className="no-drag mt-6 min-h-[44px] rounded-[10px] bg-[linear-gradient(90deg,#057FCA,#0598e0)] px-4 py-3 text-[13px] font-bold tracking-[0.04em] text-white transition hover:brightness-110 disabled:opacity-45"
+            className="no-drag min-h-[44px] rounded-[10px] border border-[rgba(52,78,102,0.72)] bg-transparent px-4 py-3 text-[12px] font-semibold text-[#cfe9ff] transition hover:border-[#057FCA] hover:bg-[rgba(52,78,102,0.32)] disabled:opacity-45"
           >
-            {submitting ? 'Signing in...' : 'Sign In'}
+            {submitting ? 'Completing Sign-In...' : 'Continue With Browser Code'}
           </button>
         </form>
 
-        <p className="mt-6 px-2 text-center text-[11px] leading-5 text-[rgba(207,233,255,0.65)]">
-          Registration is disabled. Use the login credentials provided to you.
-        </p>
-
         <div className="mt-8 text-center text-[11px] text-[rgba(207,233,255,0.5)]">
-          Or use your own API Key
+          Or use your own Gemini API key for direct mode
         </div>
 
         <form className="mt-3 grid gap-3" onSubmit={(event) => void submitApiKey(event)}>
@@ -1583,7 +1602,7 @@ function AuthGate({
             type="password"
             value={apiKey}
             onChange={(event) => setApiKey(event.target.value)}
-            placeholder="Paste Gemini API Key (starts with AIza...)"
+            placeholder="Paste Gemini API key (starts with AIza...)"
             className="no-drag min-h-[42px] rounded-[10px] border border-[rgba(52,78,102,0.72)] bg-[rgba(20,36,54,0.78)] px-3.5 py-2.5 text-[13px] text-[#e5f3ff] outline-none transition placeholder:text-[rgba(207,233,255,0.4)] focus:border-[#057FCA]"
           />
           <button
@@ -3246,11 +3265,18 @@ export default function App(): React.JSX.Element {
     <AuthGate
       auth={snapshot.auth}
       runtimeError={runtimeError}
-      onLogin={(email, password) =>
+      onStartBrowserFlow={async (mode) => {
+        const result = await window.pixelPilot.invokeRuntime('auth.startBrowserFlow', { mode });
+        const authUrl = String(result.authUrl || '').trim();
+        if (!authUrl) {
+          throw new Error('Browser auth URL is unavailable.');
+        }
+        await window.pixelPilot.openExternal(authUrl);
+      }}
+      onExchangeCode={(code) =>
         window.pixelPilot
-          .invokeRuntime('auth.login', {
-            email,
-            password
+          .invokeRuntime('auth.exchangeDesktopCode', {
+            code
           })
           .then(() => undefined)
       }

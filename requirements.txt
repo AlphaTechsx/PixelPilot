@@ -6,7 +6,9 @@ SpeechRecognition==3.14.5
 opencv-python==4.12.0.88
 torchfree-ocr==1.1.0
 google-genai==1.69.0
+httpx==0.28.1
 pillow==12.1.0
+keyring==25.6.0
 python-dotenv==1.2.1
 numpy==2.2.6
 keyboard==0.13.5

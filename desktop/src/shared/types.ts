@@ -141,6 +141,7 @@ export type PixelPilotApi = {
   getSnapshot: () => Promise<RuntimeSnapshot | null>;
   getStartupDefaults: () => Promise<StartupDefaultsSnapshot>;
   invokeRuntime: (method: string, payload?: RuntimeCommandPayload) => Promise<Record<string, unknown>>;
+  openExternal: (url: string) => Promise<void>;
   setExpanded: (expanded: boolean) => Promise<Record<string, unknown>>;
   setBackgroundHidden: (hidden: boolean) => Promise<Record<string, unknown>>;
   setTrayOnly: (enabled: boolean) => Promise<Record<string, unknown>>;

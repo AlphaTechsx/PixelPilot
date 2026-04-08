@@ -25,6 +25,7 @@ const pixelPilot: PixelPilotApi = {
     invokeIpc<StartupDefaultsSnapshot>('pixelpilot:get-startup-defaults'),
   invokeRuntime: (method: string, payload?: Record<string, unknown>) =>
     invokeIpc<Record<string, unknown>>('pixelpilot:invoke-runtime', method, payload),
+  openExternal: (url: string) => invokeIpc<void>('pixelpilot:open-external', url),
   setExpanded: (expanded: boolean) => invokeIpc<Record<string, unknown>>('pixelpilot:set-expanded', expanded),
   setBackgroundHidden: (hidden: boolean) =>
     invokeIpc<Record<string, unknown>>('pixelpilot:set-background-hidden', hidden),

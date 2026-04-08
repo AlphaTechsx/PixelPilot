@@ -19,7 +19,13 @@ from uac.flow import (
     get_uac_queue_gate,
     set_external_uac_mode,
 )
-from .auth import get_auth_state, logout_all, save_api_key
+from .auth import (
+    exchange_desktop_code,
+    get_auth_state,
+    logout_all,
+    save_api_key,
+    start_browser_flow,
+)
 from .snapshot import build_runtime_snapshot
 
 
@@ -158,8 +164,12 @@ class ElectronRuntimeService(QObject):
 
         if command == "auth.getStatus":
             return {"auth": get_auth_state()}
+        if command == "auth.startBrowserFlow":
+            return self._auth_start_browser_flow(body)
         if command == "auth.login":
             return self._auth_login(body)
+        if command == "auth.exchangeDesktopCode":
+            return self._auth_exchange_desktop_code(body)
         if command == "auth.useApiKey":
             return self._auth_use_api_key(body)
         if command == "auth.logout":
@@ -313,6 +323,20 @@ class ElectronRuntimeService(QObject):
         self.bridge_server.publish_event("auth.changed", {"auth": get_auth_state()})
         self.bridge_server.publish_state_updated()
         return {"auth": get_auth_state()}
+
+    def _auth_start_browser_flow(self, payload: dict[str, Any]) -> dict[str, Any]:
+        mode = str(payload.get("mode") or "signin").strip().lower() or "signin"
+        result = start_browser_flow(mode)
+        return {"authUrl": result["url"], "state": result["state"], "mode": result["mode"]}
+
+    def _auth_exchange_desktop_code(self, payload: dict[str, Any]) -> dict[str, Any]:
+        code = str(payload.get("code") or "").strip()
+        state = str(payload.get("state") or "").strip()
+        auth_state = exchange_desktop_code(code, state)
+        self.controller.refresh_live_runtime()
+        self.bridge_server.publish_event("auth.changed", {"auth": auth_state})
+        self.bridge_server.publish_state_updated()
+        return {"auth": auth_state}
 
     def _auth_use_api_key(self, payload: dict[str, Any]) -> dict[str, Any]:
         auth_state = save_api_key(str(payload.get("apiKey") or ""))

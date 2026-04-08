@@ -30,6 +30,7 @@ class Config:
         "BACKEND_URL",
         "https://pixelpilot-backend-564947821962.us-central1.run.app",
     )
+    WEB_URL = _env_str("WEB_URL", "http://localhost:5173")
     GEMINI_MODEL = "gemini-3-flash-preview"
     GEMINI_API_KEY = _env_str("GEMINI_API_KEY")
     USE_DIRECT_API = bool(GEMINI_API_KEY)

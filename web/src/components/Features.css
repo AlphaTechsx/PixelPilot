@@ -2,7 +2,9 @@
     height: 380vh;
     /* Determines length of scroll */
     position: relative;
-    background: var(--color-surface);
+    background: rgba(255, 255, 255, 0.015);
+    border-top: 1px solid rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .sticky-wrapper {
@@ -49,8 +51,9 @@
 .feature-panel {
     min-width: 40vw;
     height: 60vh;
-    background: #111;
+    background: rgba(15, 22, 31, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 18px;
     display: flex;
     flex-direction: column;
     justify-content: space-between;
@@ -60,15 +63,15 @@
 }
 
 .feature-panel:hover {
-    background: #161616;
-    border-color: rgba(255, 255, 255, 0.2);
+    background: rgba(18, 28, 40, 0.98);
+    border-color: rgba(124, 182, 240, 0.22);
 }
 
 .feature-id {
     font-family: var(--font-mono);
     font-size: 1rem;
     color: var(--color-primary);
-    opacity: 0.5;
+    opacity: 0.75;
 }
 
 .feature-title {

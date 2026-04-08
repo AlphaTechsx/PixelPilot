@@ -22,8 +22,9 @@ export const Footer = () => {
                     </div>
                     
                     <div className="footer-links">
-                        <a href="https://github.com/dagemawinegash/Pixel-Pilot-Project/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
-                        <a href="https://github.com/dagemawinegash/Pixel-Pilot-Project" target="_blank" rel="noreferrer">GitHub</a>
+                        <a href="https://github.com/AlphaTechsx/PixelPilot/blob/main/LICENSE" target="_blank" rel="noreferrer">License</a>
+                        <a href="https://github.com/AlphaTechsx/PixelPilot" target="_blank" rel="noreferrer">GitHub</a>
+                        <a href="https://www.linkedin.com/company/pixelpilotai/" target="_blank" rel="noreferrer">LinkedIn</a>
                         <a href="/docs">Docs</a>
                     </div>
                 </div>

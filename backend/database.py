@@ -42,6 +42,12 @@ async def lifespan(app):
     try:
         await _mongo_client.admin.command("ping")
         print("MongoDB connected successfully!")
+        try:
+            import auth
+
+            await auth.ensure_auth_indexes(_mongo_db)
+        except Exception as e:
+            print(f"Auth index setup failed: {e}")
     except Exception as e:
         print(f"MongoDB connection failed: {e}")
 

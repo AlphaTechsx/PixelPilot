@@ -2,44 +2,181 @@ import { Link } from 'react-router-dom';
 import './DocsPage.css';
 import { Footer } from '../components/Footer';
 
-const envVars = [
-    { key: 'GEMINI_API_KEY', note: 'Required' },
-    { key: 'BACKEND_URL', note: 'Required for backend mode' },
-    { key: 'Advanced tuning', note: 'Edit src/config.py for all other runtime values' }
+const gettingStarted = [
+    {
+        title: 'Install the desktop app',
+        detail:
+            'Most users only need the Windows installer. The packaged app registers the deep-link handler, ships the Electron shell, and runs the Python runtime underneath.'
+    },
+    {
+        title: 'Choose an auth path',
+        detail:
+            'Use browser sign-in or browser sign-up for hosted backend mode, or paste a Gemini API key to run in direct mode without an account gate.'
+    },
+    {
+        title: 'Operate from one shell',
+        detail:
+            'PixelPilot keeps command entry, Live state, session context, diagnostics, and auth state in the desktop shell instead of splitting that experience across extra tools.'
+    }
 ];
 
-const moduleMap = [
-    { name: 'src/main.py', detail: 'PySide6 UI, live-only runtime wiring, and app entry.' },
-    { name: 'src/agent', detail: 'Shared automation runtime, capture, action execution, and workspace state.' },
-    { name: 'src/live/session.py', detail: 'Gemini Live session manager, reconnect flow, voice, and transcript lifecycle.' },
-    { name: 'src/live/broker.py', detail: 'Serialized action broker with queued/running/cancel/succeeded states.' },
-    { name: 'src/live/tools.py', detail: 'Live tool declarations for UI Automation and mutating action boundaries.' },
-    { name: 'src/core', detail: 'Controllers, logging, and app lifecycle glue.' },
-    { name: 'src/tools', detail: 'Mouse, keyboard, vision, and app indexing tools.' },
-    { name: 'src/skills', detail: 'Browser, media, system, timer skill surfaces.' },
-    { name: 'src/desktop', detail: 'Agent Desktop sandbox and preview stream.' },
-    { name: 'src/uac', detail: 'Orchestrator and Secure Desktop agent.' },
-    { name: 'src/services', detail: 'Gateway and auxiliary service adapters.' },
-    { name: 'backend', detail: 'FastAPI service and auth utilities.' }
+const architectureLayers = [
+    {
+        title: 'Desktop shell',
+        detail:
+            'Electron + React render the overlay, auth gate, docs-facing shell states, and desktop deep-link handling for browser-first sign-in.'
+    },
+    {
+        title: 'Runtime bridge',
+        detail:
+            'A local bridge connects the Electron UI to the Python runtime. Commands such as auth, diagnostics, session restore, and Live controls travel through this bridge.'
+    },
+    {
+        title: 'Python runtime',
+        detail:
+            'The runtime coordinates Gemini Live, automation policies, session state, hotkeys, UAC flow, tool routing, and activity logging.'
+    },
+    {
+        title: 'Automation and perception',
+        detail:
+            'Execution starts with UI Automation when possible, then escalates to OCR or visual helpers when semantic structure is missing or unstable.'
+    },
+    {
+        title: 'Optional backend',
+        detail:
+            'FastAPI provides hosted auth, desktop code redemption, OCR services, Gemini key brokerage, and a JWT-protected Live relay for signed-in users.'
+    }
 ];
 
-const modeGuide = [
-    { mode: 'GUIDANCE', detail: 'Live read-only coaching mode. Pixie tutors the user but does not take desktop actions.' },
-    { mode: 'SAFE', detail: 'Live autonomous mode that confirms every mutating desktop action.' },
-    { mode: 'AUTO', detail: 'Live autonomous mode without per-action confirmation.' },
-    { mode: 'Live connection', detail: 'When available, Live stays enabled and the top-bar control disconnects or reconnects the session instead of toggling AI off.' }
+const codebaseMap = [
+    { name: 'desktop/', detail: 'Electron main process, preload bridge, renderer UI, packaging, and desktop deep-link integration.' },
+    { name: 'web/', detail: 'Landing site, hosted auth pages, and public documentation surfaces.' },
+    { name: 'src/runtime/', detail: 'Runtime bridge commands, auth status, startup snapshot building, and Electron-facing runtime service glue.' },
+    { name: 'src/live/', detail: 'Gemini Live session lifecycle, brokered action execution, tool declarations, and reconnect behavior.' },
+    { name: 'src/tools/', detail: 'Desktop action tools, OCR routing, app indexing, and lower-level execution helpers.' },
+    { name: 'src/uac/', detail: 'Secure Desktop detection, orchestrator messaging, IPC helpers, and elevation-specific control paths.' },
+    { name: 'src/services/', detail: 'Gateway and service-level integrations that sit beside the main runtime.' },
+    { name: 'src/auth_manager.py', detail: 'Desktop auth flow orchestration, browser-flow state, secure token persistence, and backend handoff redemption.' },
+    { name: 'backend/', detail: 'FastAPI routes, OAuth/JWT auth logic, Redis-backed limits, OCR services, and backend Gemini Live relay.' }
 ];
 
-const visionGuide = [
-    { mode: 'UIA', detail: 'Blind-first UI Automation snapshotting, targeting, text reads, and window focus.' },
-    { mode: 'OCR', detail: 'EasyOCR-ONNX + OpenCV for fast local parsing when semantics are enough.' },
-    { mode: 'ROBO', detail: 'Gemini Robotics-ER fallback for semantic UI disambiguation.' }
+const operatorFeatures = [
+    {
+        title: 'Browser-first authentication',
+        bullets: [
+            'Desktop app opens hosted sign-in or sign-up in the default browser.',
+            'Google OAuth and email/password both end in a one-time desktop code redeem.',
+            'Windows secure credential storage persists the backend session token.'
+        ]
+    },
+    {
+        title: 'Direct mode',
+        bullets: [
+            'A local Gemini API key can bypass backend auth entirely.',
+            'Direct mode keeps the desktop usable when a hosted backend is not desired.',
+            'The auth gate clearly separates direct Gemini usage from hosted account mode.'
+        ]
+    },
+    {
+        title: 'Gemini Live runtime',
+        bullets: [
+            'Typed and voice control share one Live-first runtime model.',
+            'Session connection is explicit, and voice capture is no longer forced at startup.',
+            'Stop requests and action cancellation respect broker state instead of interrupting blindly.'
+        ]
+    },
+    {
+        title: 'Automation model',
+        bullets: [
+            'GUIDANCE is read-only coaching, SAFE requires approval for mutations, and AUTO runs mutating actions without per-step confirmation.',
+            'Hotkeys work globally even when the overlay is unfocused.',
+            'Agent Desktop isolation remains available for separated task execution.'
+        ]
+    },
+    {
+        title: 'Perception stack',
+        bullets: [
+            'UI Automation is the preferred path for structure, targeting, and text reads.',
+            'EasyOCR-ONNX and OpenCV provide local or backend-hosted OCR and icon cues.',
+            'Visual fallbacks only step in when blind automation evidence is insufficient.'
+        ]
+    },
+    {
+        title: 'Observability and recovery',
+        bullets: [
+            'Session context can be resumed from stored summaries.',
+            'Diagnostics are exposed through the desktop Settings Hub.',
+            'Logs, app index cache, and resumable session artifacts stay on disk for debugging.'
+        ]
+    }
 ];
 
-const liveGuide = [
-    { mode: 'Action Broker', detail: 'Mutating actions are serialized with queued/running/cancel states.' },
-    { mode: 'Voice Runtime', detail: 'Native-audio live stream with mic/speaker queue handling and reconnect continuity.' },
-    { mode: 'Stop Safety', detail: 'Live stop requests cancel current actions and pause at safe boundaries.' }
+const contributionGuide = [
+    {
+        title: 'Pick the right surface',
+        detail:
+            'Desktop UI work usually lives in desktop/, runtime behavior in src/, hosted auth and OCR in backend/, and public marketing/docs changes in web/.'
+    },
+    {
+        title: 'Develop locally with explicit mode choices',
+        detail:
+            'Use a local GEMINI_API_KEY for direct mode, or point BACKEND_URL and WEB_URL at your hosted or local auth stack for backend mode.'
+    },
+    {
+        title: 'Respect the Windows packaging path',
+        detail:
+            'Protocol registration, UAC tasks, and packaged runtime binaries all matter. If you change startup, auth handoff, or elevation flow, test the packaged behavior too.'
+    },
+    {
+        title: 'Verify at the layer you changed',
+        detail:
+            'Run web builds for docs and marketing changes, desktop tests for renderer/main changes, and backend tests for auth or service updates.'
+    }
+];
+
+const contributorCommands = [
+    {
+        title: 'Desktop',
+        command: `cd desktop\nnpm install\nnpm start`,
+        note: 'Use while iterating on Electron renderer or shell behavior.'
+    },
+    {
+        title: 'Web',
+        command: `cd web\nnpm install\nnpm run dev`,
+        note: 'Use for the landing page, hosted auth pages, and docs route.'
+    },
+    {
+        title: 'Backend',
+        command: `cd backend\npip install -r requirements.txt\nuvicorn main:app --host 0.0.0.0 --port 8000 --reload`,
+        note: 'Use for hosted auth, OCR routes, Live relay work, and Redis/Mongo-backed flows.'
+    }
+];
+
+const docsSections = [
+    {
+        title: 'Environment',
+        items: [
+            ['Repo root .env', 'Desktop runtime config such as GEMINI_API_KEY, BACKEND_URL, and WEB_URL.'],
+            ['backend/.env', 'Hosted service secrets for MongoDB, Redis, JWT, Google OAuth, and backend Gemini services.'],
+            ['web/.env.local', 'Frontend build-time values such as VITE_BACKEND_URL for hosted auth pages.']
+        ]
+    },
+    {
+        title: 'Testing and verification',
+        items: [
+            ['Desktop tests', 'Run npm test inside desktop/ for renderer and main-process coverage.'],
+            ['Web build and tests', 'Run npm test and npm run build inside web/ before shipping docs or auth UI changes.'],
+            ['Python checks', 'Run targeted pytest commands from the repo venv or backend venv depending on the layer touched.']
+        ]
+    },
+    {
+        title: 'Operational notes',
+        items: [
+            ['Logs', 'Check logs/pixelpilot.log for runtime activity and auth-flow issues.'],
+            ['Auth storage', 'Desktop tokens live in Windows Credential Manager, with a one-time migration from the legacy auth.json path.'],
+            ['Troubleshooting', 'Backend mode depends on reachable MongoDB and Redis plus valid Google OAuth settings for hosted login.']
+        ]
+    }
 ];
 
 export const DocsPage = () => {
@@ -48,58 +185,34 @@ export const DocsPage = () => {
             <header className="docs-hero">
                 <div className="container">
                     <span className="docs-kicker">PIXELPILOT DOCUMENTATION</span>
-                    <h1>Operator Guide, Systems Map, and Runtime Notes</h1>
+                    <h1>Product Guide, Architecture Map, and Contributor Handbook</h1>
                     <p>
-                        Detailed documentation for the PixelPilot codebase. Powered by the Gemini
-                        GenAI SDK with Gemini Live sessions, UI Automation-first execution, and Secure Desktop support.
+                        PixelPilot is a Windows desktop automation agent with a browser-first hosted auth
+                        flow, a Gemini direct mode, a Live-first runtime, and optional backend services for
+                        OCR and authenticated sessions. These docs cover how it works, how the codebase is
+                        organized, and how to contribute safely.
                     </p>
                     <div className="docs-hero-actions">
                         <Link className="docs-cta primary" to="/">Back to Landing</Link>
-                        <a className="docs-cta" href="https://github.com/dagemawinegash/Pixel-Pilot-Project" target="_blank" rel="noreferrer">GitHub</a>
+                        <a className="docs-cta" href="https://github.com/AlphaTechsx/PixelPilot" target="_blank" rel="noreferrer">GitHub</a>
                     </div>
                 </div>
             </header>
 
             <section className="docs-section">
-                <div className="container docs-grid">
-                    <article className="docs-card">
-                        <h2>Install</h2>
-                        <p>Run the installer to create the virtual environment and scheduled tasks.</p>
-                        <pre>{`$ git clone https://github.com/dagemawinegash/Pixel-Pilot-Project.git\n$ cd Pixel-Pilot-Project\n$ python install.py`}</pre>
-                        <div className="docs-note">Optional: <code>python install.py --no-tasks</code></div>
-                        <ul>
-                            <li>Builds UAC helpers and scheduled tasks.</li>
-                            <li>Creates the Desktop shortcut launcher.</li>
-                        </ul>
-                    </article>
-
-                    <article className="docs-card">
-                        <h2>Configuration</h2>
-                        <p>Create a <code>.env</code> in the repo root (copy from <code>env.example</code>). The app will not start without <code>GEMINI_API_KEY</code>.</p>
-                        <div className="docs-env">
-                            {envVars.map((item) => (
-                                <div key={item.key} className="env-row">
-                                    <span>{item.key}</span>
-                                    <span>{item.note}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </article>
-
-                    <article className="docs-card">
-                        <h2>Run</h2>
-                        <p>Use the Desktop shortcut for full UAC coverage or run manually.</p>
-                        <div className="docs-split">
-                            <div>
-                                <span className="pill">Recommended</span>
-                                <p>Open the PixelPilot Desktop shortcut.</p>
-                            </div>
-                            <div>
-                                <span className="pill">CLI</span>
-                                <pre>$ .\venv\Scripts\python.exe .\src\main.py</pre>
-                            </div>
-                        </div>
-                    </article>
+                <div className="container">
+                    <div className="docs-section-header">
+                        <h2>What Ships</h2>
+                        <p>The shipped experience is centered on the desktop app, with hosted services only when you want account-backed mode.</p>
+                    </div>
+                    <div className="docs-grid">
+                        {gettingStarted.map((item) => (
+                            <article key={item.title} className="docs-card">
+                                <h2>{item.title}</h2>
+                                <p>{item.detail}</p>
+                            </article>
+                        ))}
+                    </div>
                 </div>
             </section>
 
@@ -107,103 +220,19 @@ export const DocsPage = () => {
                 <div className="container">
                     <div className="docs-section-header">
                         <h2>Architecture</h2>
-                        <p>End-to-end flow from UI intent to Live execution, verification, and Secure Desktop orchestration.</p>
+                        <p>PixelPilot spans desktop shell, local runtime, optional backend services, and a hosted browser handoff for sign-in.</p>
                     </div>
-                    <div className="docs-diagram arch-diagram" role="img" aria-label="PixelPilot architecture diagram">
-                        <div className="arch-lane">
-                            <h3 className="arch-lane-title">Primary Desktop Runtime</h3>
-                            <div className="arch-flow-row">
-                                <article className="arch-node">
-                                    <h4>Chat UI + Mode Control</h4>
-                                    <p>Live toggle, workspace policy</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>Live Session Manager</h4>
-                                    <p>turn state, reconnect, transcript flow</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>Vision Router</h4>
-                                    <p>UIA first, OCR/Robo fallback</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>Desktop Tools</h4>
-                                    <p>mouse, keyboard, app skills</p>
-                                </article>
-                            </div>
-                        </div>
-
-                        <div className="arch-lane-connector" aria-hidden="true">↓</div>
-
-                        <div className="arch-lane">
-                            <h3 className="arch-lane-title">Live and Automation Execution</h3>
-                            <div className="arch-flow-row arch-flow-row-3">
-                                <article className="arch-node">
-                                    <h4>Gemini Live Session</h4>
-                                    <p>voice, transcript, reconnect</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>Live Action Broker</h4>
-                                    <p>queued, running, cancel states</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>UI Automation</h4>
-                                    <p>snapshot, focus, read text</p>
-                                </article>
-                            </div>
-                        </div>
-
-                        <div className="arch-lane-connector" aria-hidden="true">↓</div>
-
-                        <div className="arch-lane">
-                            <h3 className="arch-lane-title">Privilege and Integration Layer</h3>
-                            <div className="arch-flow-row arch-flow-row-3">
-                                <article className="arch-node">
-                                    <h4>Agent Desktop Isolation</h4>
-                                    <p>optional</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>UAC Orchestrator + Secure Desktop Agent</h4>
-                                    <p>elevated prompt handling</p>
-                                </article>
-                                <span className="arch-arrow" aria-hidden="true">→</span>
-                                <article className="arch-node">
-                                    <h4>FastAPI Backend and Gateway</h4>
-                                    <p>optional integration path</p>
-                                </article>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section className="docs-section">
-                <div className="container docs-columns">
-                    <div>
-                        <h2>Operation Modes</h2>
-                        <p>Choose the level of autonomy and when PixelPilot should ask for help.</p>
-                        <div className="stack">
-                            {modeGuide.map((item) => (
-                                <div key={item.mode} className="stack-row">
-                                    <span>{item.mode}</span>
-                                    <span>{item.detail}</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                    <div>
-                        <h2>Perception Stack</h2>
-                        <p>Execution prefers UI Automation evidence before escalating to visual models.</p>
-                        <div className="stack">
-                            {visionGuide.map((item) => (
-                                <div key={item.mode} className="stack-row">
-                                    <span>{item.mode}</span>
-                                    <span>{item.detail}</span>
+                    <div className="docs-diagram">
+                        <div className="arch-stack">
+                            {architectureLayers.map((item, index) => (
+                                <div key={item.title} className="arch-layer">
+                                    <article className="arch-node">
+                                        <h4>{item.title}</h4>
+                                        <p>{item.detail}</p>
+                                    </article>
+                                    {index < architectureLayers.length - 1 ? (
+                                        <div className="arch-lane-connector" aria-hidden="true">|</div>
+                                    ) : null}
                                 </div>
                             ))}
                         </div>
@@ -212,77 +241,13 @@ export const DocsPage = () => {
             </section>
 
             <section className="docs-section">
-                <div className="container docs-grid">
-                    <article className="docs-card">
-                        <h2>Gemini Live Runtime</h2>
-                        <p>Live sessions are first-class and default-on when direct API mode is available.</p>
-                        <ul>
-                            <li>Streams voice/text with session continuity and reconnect support.</li>
-                            <li>Uses action serialization so mutating calls do not overlap.</li>
-                            <li>Supports safe stop requests with broker-aware cancellation.</li>
-                        </ul>
-                    </article>
-                    <article className="docs-card">
-                        <h2>UI Automation Core</h2>
-                        <p>Blind execution uses UIA primitives before screenshot-heavy reasoning.</p>
-                        <ul>
-                            <li>Window listing and focus for deterministic app targeting.</li>
-                            <li><code>ui_element_id</code> actions for stable click/type workflows.</li>
-                            <li>Text extraction via UIA first, OCR fallback when needed.</li>
-                        </ul>
-                    </article>
-                    <article className="docs-card">
-                        <h2>Live Orchestration</h2>
-                        <p>Live runtime coordinates execution order, continuity, and interruption safety.</p>
-                        <ul>
-                            {liveGuide.map((item) => (
-                                <li key={item.mode}><strong>{item.mode}:</strong> {item.detail}</li>
-                            ))}
-                        </ul>
-                    </article>
-                </div>
-            </section>
-
-            <section className="docs-section">
-                <div className="container docs-grid">
-                    <article className="docs-card">
-                        <h2>Hotkeys</h2>
-                        <p>System-wide controls for quick access.</p>
-                        <ul>
-                            <li><code>Ctrl+Shift+Z</code> Toggle click-through</li>
-                            <li><code>Ctrl+Shift+X</code> Stop current Live turn</li>
-                            <li><code>Ctrl+Shift+Q</code> Quit PixelPilot</li>
-                        </ul>
-                    </article>
-                    <article className="docs-card">
-                        <h2>Gateway (Optional)</h2>
-                        <p>The gateway can submit remote commands into the live runtime when <code>ENABLE_GATEWAY=true</code>.</p>
-                        <ul>
-                            <li>File: <code>src/services/gateway.py</code></li>
-                            <li>Uses the active Gemini Live session for execution</li>
-                            <li>Protect with <code>PIXELPILOT_GATEWAY_TOKEN</code></li>
-                        </ul>
-                    </article>
-                    <article className="docs-card">
-                        <h2>Troubleshooting</h2>
-                        <p>Quick checks for common startup issues.</p>
-                        <ul>
-                            <li>Verify <code>GEMINI_API_KEY</code> in <code>.env</code>.</li>
-                            <li>Check <code>logs/pixelpilot.log</code> for errors.</li>
-                            <li>Re-run installer as admin if UAC fails.</li>
-                        </ul>
-                    </article>
-                </div>
-            </section>
-
-            <section className="docs-section dark">
                 <div className="container">
                     <div className="docs-section-header">
-                        <h2>Codebase Map</h2>
-                        <p>High-signal modules that shape runtime behavior.</p>
+                        <h2>Codebase Structure</h2>
+                        <p>This map is near the top on purpose so contributors can orient themselves before changing behavior.</p>
                     </div>
                     <div className="module-grid">
-                        {moduleMap.map((item) => (
+                        {codebaseMap.map((item) => (
                             <div key={item.name} className="module-card">
                                 <span>{item.name}</span>
                                 <p>{item.detail}</p>
@@ -293,30 +258,70 @@ export const DocsPage = () => {
             </section>
 
             <section className="docs-section">
+                <div className="container">
+                    <div className="docs-section-header">
+                        <h2>Detailed Functionality</h2>
+                        <p>The product is more than installation. These are the major behavior surfaces users and contributors interact with.</p>
+                    </div>
+                    <div className="docs-grid">
+                        {operatorFeatures.map((item) => (
+                            <article key={item.title} className="docs-card">
+                                <h2>{item.title}</h2>
+                                <ul>
+                                    {item.bullets.map((bullet) => (
+                                        <li key={bullet}>{bullet}</li>
+                                    ))}
+                                </ul>
+                            </article>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            <section className="docs-section dark">
+                <div className="container">
+                    <div className="docs-section-header">
+                        <h2>Contributing</h2>
+                        <p>Contribution work is easiest when changes stay aligned with the product boundaries above.</p>
+                    </div>
+                    <div className="docs-grid">
+                        {contributionGuide.map((item) => (
+                            <article key={item.title} className="docs-card">
+                                <h2>{item.title}</h2>
+                                <p>{item.detail}</p>
+                            </article>
+                        ))}
+                    </div>
+                </div>
+            </section>
+
+            <section className="docs-section">
                 <div className="container docs-grid">
-                    <article className="docs-card">
-                        <h2>Security + UAC</h2>
-                        <p>Secure Desktop prompts are handled by the SYSTEM orchestrator task with one-shot IPC and explicit confirmation before allow.</p>
-                        <ul>
-                            <li>Tasks: PixelPilotUACOrchestrator and PixelPilotApp.</li>
-                            <li>Orchestrator watches per-request UAC IPC files.</li>
-                            <li>Allow responses require explicit user confirmation.</li>
-                        </ul>
-                    </article>
-                    <article className="docs-card">
-                        <h2>Logging</h2>
-                        <p>Runtime logs live under <code>logs/</code>.</p>
-                        <ul>
-                            <li><code>logs/pixelpilot.log</code> for agent activity.</li>
-                            <li><code>logs/app_launch.log</code> for launcher tasks.</li>
-                        </ul>
-                    </article>
-                    <article className="docs-card">
-                        <h2>Uninstall</h2>
-                        <p>Remove tasks, venv, and cached assets.</p>
-                        <pre>$ python uninstall.py</pre>
-                        <p className="docs-note">Use flags to keep tasks, venv, or logs.</p>
-                    </article>
+                    {contributorCommands.map((item) => (
+                        <article key={item.title} className="docs-card">
+                            <h2>{item.title}</h2>
+                            <pre>{item.command}</pre>
+                            <p className="docs-note">{item.note}</p>
+                        </article>
+                    ))}
+                </div>
+            </section>
+
+            <section className="docs-section">
+                <div className="container docs-columns">
+                    {docsSections.map((section) => (
+                        <div key={section.title}>
+                            <h2>{section.title}</h2>
+                            <div className="stack">
+                                {section.items.map(([label, detail]) => (
+                                    <div key={label} className="stack-row">
+                                        <span>{label}</span>
+                                        <span>{detail}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             </section>
 

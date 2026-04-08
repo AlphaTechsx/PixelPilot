@@ -4,10 +4,10 @@ import './QuickStart.css';
 import { Magnetic } from './Magnetic';
 
 const commands = [
-    { text: "Discover the project vision", output: "Read the architecture and safety model overview." },
-    { text: "Review installation guide", output: "Follow the docs path for setup and environment variables." },
-    { text: "Explore operation modes", output: "Choose Guidance, Safe, or Auto based on your workflow." },
-    { text: "Launch PixelPilot locally", output: "Run with the desktop shortcut or direct CLI command." }
+    { text: "Install the PixelPilot desktop app", output: "The MSI registers the deep link and stages the runtime helpers." },
+    { text: "Choose hosted sign-in or direct mode", output: "Sign in through the browser or paste your own Gemini API key." },
+    { text: "Review operation modes", output: "Choose Guidance, Safe, or Auto based on the level of autonomy you want." },
+    { text: "Open docs and backend notes", output: "See hosted auth, backend setup, and troubleshooting details." }
 ];
 
 export const QuickStart = () => {
@@ -16,7 +16,7 @@ export const QuickStart = () => {
             <div className="container">
                 <div className="qs-content">
                     <h2 className="qs-title">GET STARTED</h2>
-                    <p className="qs-subtitle">A simple path from discovery to first launch.</p>
+                    <p className="qs-subtitle">A simple path from install to first command.</p>
                 </div>
 
                 <div className="terminal-window">
