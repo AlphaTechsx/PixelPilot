@@ -37,9 +37,13 @@ def is_admin() -> bool:
         return False
 
 
-def run_as_admin() -> None:
-    params = subprocess.list2cmdline(sys.argv)
-    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+def run_as_admin(extra_args: list[str] | None = None) -> bool:
+    argv = list(sys.argv)
+    if extra_args:
+        argv.extend(extra_args)
+    params = subprocess.list2cmdline(argv)
+    result = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+    return int(result) > 32
 
 
 def ensure_venv(venv_dir: Path = DEFAULT_VENV_DIR) -> str | None:
@@ -310,7 +314,6 @@ def create_launcher_task(script_path: Path, python_exe: str | None = None, log_p
         print(f"[!] Python executable not found: {python_exe}. Falling back to current Python.")
         python_exe = os.path.abspath(sys.executable)
 
-    # python_exe = _pythonw_for(python_exe) # We use python.exe with hidden window so we can capture logs
     work_dir = str(script_path.parent)
 
     log_path_str = None
@@ -322,18 +325,11 @@ def create_launcher_task(script_path: Path, python_exe: str | None = None, log_p
     launcher_vbs = REPO_ROOT / "logs" / "launch_pixelpilot.vbs"
     launcher_vbs.parent.mkdir(parents=True, exist_ok=True)
 
-    # Clean up any older launch script variant if it exists
-    try:
-        (REPO_ROOT / "logs" / "launch_pixelpilot.cmd").unlink()
-    except Exception:
-        pass
-
     py_esc = python_exe.replace('"', '""')
     script_esc = str(script_path).replace('"', '""')
 
     if log_path_str:
         log_esc = log_path_str.replace('"', '""')
-        # Wrap the whole command in double quotes for cmd /c rule
         run_cmd = f'cmd /c "" ""{py_esc}"" ""{script_esc}"" >> ""{log_esc}"" 2>&1 ""'
     else:
         run_cmd = f'""{py_esc}"" ""{script_esc}""'
@@ -495,25 +491,39 @@ def main() -> None:
         action="store_true",
         help="Skip creating scheduled tasks and desktop shortcut",
     )
+    parser.add_argument(
+        "--resume-phase",
+        choices=("full", "admin"),
+        default="full",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--python-exe",
+        default=None,
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
 
     print("=== PIXEL PILOT INSTALLER ===")
+    if args.resume_phase == "admin":
+        print("[*] Resuming installer at admin-only phase...")
 
-    venv_python: str | None
-    if not args.no_venv:
-        venv_python = ensure_venv(Path(args.venv_dir))
-        if not venv_python:
-            print("[-] Virtualenv creation failed. Aborting.")
-            return
-        if not install_requirements(venv_python, Path(args.requirements)):
-            return
-        prefetch_ocr_models(venv_python)
-        prebuild_app_index(venv_python)
-    else:
-        venv_python = None
+    venv_python: str | None = args.python_exe or None
+    if args.resume_phase != "admin":
+        if not args.no_venv:
+            venv_python = ensure_venv(Path(args.venv_dir))
+            if not venv_python:
+                print("[-] Virtualenv creation failed. Aborting.")
+                return
+            if not install_requirements(venv_python, Path(args.requirements)):
+                return
+            prefetch_ocr_models(venv_python)
+            prebuild_app_index(venv_python)
+        else:
+            venv_python = None
 
-    if not prepare_desktop_shell(venv_python):
-        return
+        if not prepare_desktop_shell(venv_python):
+            return
 
     if args.no_tasks:
         print("[*] Skipping scheduled tasks/shortcut (requested).")
@@ -522,10 +532,13 @@ def main() -> None:
 
     if not is_admin():
         print("[!] Admin rights required to set up scheduled tasks/shortcut.")
-        run_as_admin()
+        elevate_args = ["--resume-phase", "admin"]
+        if venv_python:
+            elevate_args.extend(["--python-exe", venv_python])
+        if not run_as_admin(elevate_args):
+            print("[-] Elevation request was cancelled or failed.")
         return
 
-    # Build UAC helper executables used by secure desktop automation
     if not compile_script(AGENT_SCRIPT, AGENT_EXE_NAME, python_exe=venv_python):
         return
 
