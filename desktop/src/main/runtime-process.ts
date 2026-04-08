@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import net, { type Server as NetServer } from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +13,10 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BRIDGE_START_TIMEOUT_MS = 30000;
 const BRIDGE_POLL_INTERVAL_MS = 150;
+type ReleaseConfig = {
+  backendUrl?: string;
+  webUrl?: string;
+};
 
 function prependEnvPath(currentValue: string | undefined, nextEntry: string): string {
   if (!currentValue) {
@@ -34,6 +39,33 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function loadPackagedReleaseConfig(): ReleaseConfig {
+  if (!app.isPackaged) {
+    return {};
+  }
+
+  try {
+    const configPath = path.join(process.resourcesPath, 'release-config.json');
+    if (!fs.existsSync(configPath)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(configPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') {
+      return {};
+    }
+
+    return {
+      backendUrl:
+        typeof parsed.backendUrl === 'string' ? parsed.backendUrl.trim() : undefined,
+      webUrl: typeof parsed.webUrl === 'string' ? parsed.webUrl.trim() : undefined
+    };
+  } catch {
+    return {};
+  }
 }
 
 async function canConnect(url: string): Promise<boolean> {
@@ -102,10 +134,15 @@ export class RuntimeProcessManager {
     this.port = await getFreePort();
     this.token = crypto.randomUUID();
     const launch = this.resolveRuntimeLaunch();
+    const releaseConfig = loadPackagedReleaseConfig();
 
     const env = {
       ...process.env,
       ...launch.env,
+      ...(releaseConfig.backendUrl && !process.env.BACKEND_URL
+        ? { BACKEND_URL: releaseConfig.backendUrl }
+        : {}),
+      ...(releaseConfig.webUrl && !process.env.WEB_URL ? { WEB_URL: releaseConfig.webUrl } : {}),
       PIXELPILOT_ELECTRON_BRIDGE_HOST: '127.0.0.1',
       PIXELPILOT_ELECTRON_BRIDGE_PORT: String(this.port),
       PIXELPILOT_ELECTRON_BRIDGE_TOKEN: this.token

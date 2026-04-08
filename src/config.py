@@ -28,9 +28,9 @@ def _env_str(name: str, default: str = "") -> str:
 class Config:
     BACKEND_URL = _env_str(
         "BACKEND_URL",
-        "https://pixelpilot-backend-564947821962.us-central1.run.app",
+        "https://pixelpilot-xk7c.onrender.com",
     )
-    WEB_URL = _env_str("WEB_URL", "http://localhost:5173")
+    WEB_URL = _env_str("WEB_URL", "https://pixelpilotai.vercel.app")
     GEMINI_MODEL = "gemini-3-flash-preview"
     GEMINI_API_KEY = _env_str("GEMINI_API_KEY")
     USE_DIRECT_API = bool(GEMINI_API_KEY)
