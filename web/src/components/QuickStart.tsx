@@ -4,10 +4,10 @@ import './QuickStart.css';
 import { Magnetic } from './Magnetic';
 
 const commands = [
-    { text: "Install the PixelPilot desktop app", output: "The MSI registers the deep link and stages the runtime helpers." },
-    { text: "Choose hosted sign-in or direct mode", output: "Sign in through the browser or paste your own Gemini API key." },
-    { text: "Review operation modes", output: "Choose Guidance, Safe, or Auto based on the level of autonomy you want." },
-    { text: "Open docs and backend notes", output: "See hosted auth, backend setup, and troubleshooting details." }
+    { text: "Install the desktop control room", output: "The installer wires up deep links and stages the runtime helpers." },
+    { text: "Choose your connection path", output: "Use hosted sign-in or bring your own Gemini API key for direct mode." },
+    { text: "Set the automation posture", output: "Pick Guidance, Safe, or Auto based on how much autonomy you want." },
+    { text: "Open the field manual", output: "Review hosted auth, backend setup, and troubleshooting in one pass." }
 ];
 
 export const QuickStart = () => {
@@ -16,7 +16,7 @@ export const QuickStart = () => {
             <div className="container">
                 <div className="qs-content">
                     <h2 className="qs-title">GET STARTED</h2>
-                    <p className="qs-subtitle">A simple path from install to first command.</p>
+                    <p className="qs-subtitle">A clean runway from first install to first live command.</p>
                 </div>
 
                 <div className="terminal-window">
@@ -24,7 +24,7 @@ export const QuickStart = () => {
                         <div className="t-dot red" />
                         <div className="t-dot yellow" />
                         <div className="t-dot green" />
-                        <span className="t-title">pixelpilot.io / launch-path</span>
+                        <span className="t-title">operator://first-launch</span>
                     </div>
                     <div className="terminal-body">
                         {commands.map((cmd, i) => (

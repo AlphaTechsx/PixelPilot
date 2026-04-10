@@ -7,7 +7,7 @@ export const Footer = () => {
         <footer className="big-footer">
             <div className="container footer-inner">
                 <div className="footer-callout">
-                    <h2>BUILD WITH<br/>PIXELPILOT</h2>
+                    <h2>RUN THE<br/>DESKTOP LIKE MISSION CONTROL</h2>
                     <Magnetic strength={0.5}>
                         <div className="scroll-top-btn" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
                             &uarr;
