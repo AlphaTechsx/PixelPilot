@@ -41,6 +41,7 @@ class ElectronBridgeServer:
         self._shutdown_event: asyncio.Event | None = None
         self._ready_event = threading.Event()
         self._runtime_ready = False
+        self._startup_error: BaseException | None = None
 
         self._lock = threading.RLock()
         self._control_connections: set[ServerConnection] = set()
@@ -65,9 +66,14 @@ class ElectronBridgeServer:
             return
 
         self._ready_event.clear()
+        self._startup_error = None
         self._thread = threading.Thread(target=self._run, name="PixelPilotElectronBridge", daemon=True)
         self._thread.start()
         if not self._ready_event.wait(timeout=10.0):
+            if self._startup_error is not None:
+                raise RuntimeError("Electron bridge failed to start.") from self._startup_error
+            if self._thread and not self._thread.is_alive():
+                raise RuntimeError("Electron bridge thread exited before startup completed.")
             raise RuntimeError("Electron bridge failed to start in time.")
 
     def stop(self) -> None:
@@ -144,6 +150,11 @@ class ElectronBridgeServer:
         self._shutdown_event = asyncio.Event()
         try:
             self._loop.run_until_complete(self._serve())
+        except BaseException as exc:  # noqa: BLE001
+            self._startup_error = exc
+            logger.exception("Electron bridge server crashed during startup.")
+            self._ready_event.set()
+            raise
         finally:
             pending = asyncio.all_tasks(self._loop)
             for task in pending:

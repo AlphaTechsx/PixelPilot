@@ -16,13 +16,25 @@ SRC_DIR = REPO_ROOT / "src"
 @dataclass(frozen=True)
 class BuildTarget:
     script_path: Path
-    exe_name: str
+    name: str
+
+    @property
+    def exe_name(self) -> str:
+        return f"{self.name}.exe"
+
+    @property
+    def output_dir(self) -> Path:
+        return DIST_DIR / self.name
+
+    @property
+    def output_executable(self) -> Path:
+        return self.output_dir / self.exe_name
 
 
 BUILD_TARGETS = (
-    BuildTarget(REPO_ROOT / "src" / "runtime" / "bootstrap.py", "pixelpilot-runtime.exe"),
-    BuildTarget(REPO_ROOT / "src" / "uac" / "orchestrator.py", "orchestrator.exe"),
-    BuildTarget(REPO_ROOT / "src" / "uac" / "agent.py", "agent.exe"),
+    BuildTarget(REPO_ROOT / "src" / "runtime" / "bootstrap.py", "pixelpilot-runtime"),
+    BuildTarget(REPO_ROOT / "src" / "uac" / "orchestrator.py", "orchestrator"),
+    BuildTarget(REPO_ROOT / "src" / "uac" / "agent.py", "agent"),
 )
 
 
@@ -52,13 +64,19 @@ def build_target(target: BuildTarget, python_exe: str) -> Path | None:
     if target.exe_name != "orchestrator.exe":
         _kill_process("orchestrator.exe")
 
+    if target.output_dir.exists():
+        shutil.rmtree(target.output_dir, ignore_errors=True)
+    legacy_output = DIST_DIR / target.exe_name
+    if legacy_output.exists():
+        legacy_output.unlink(missing_ok=True)
+
     _ensure_pyinstaller(python_exe)
 
     command = [
         python_exe,
         "-m",
         "PyInstaller",
-        "--onefile",
+        "--onedir",
         "--noconsole",
         "--collect-data",
         "torchfree_ocr",
@@ -69,7 +87,7 @@ def build_target(target: BuildTarget, python_exe: str) -> Path | None:
         "--specpath",
         str(DIST_DIR),
         "--name",
-        target.exe_name.removesuffix(".exe"),
+        target.name,
         str(target.script_path),
     ]
 
@@ -90,9 +108,9 @@ def build_target(target: BuildTarget, python_exe: str) -> Path | None:
             print(stdout)
         return None
 
-    output_path = DIST_DIR / target.exe_name
+    output_path = target.output_executable
     if not output_path.exists():
-        print(f"[-] Expected runtime binary was not created: {output_path}")
+        print(f"[-] Expected runtime binary directory was not created: {output_path}")
         return None
 
     print(f"[+] Compiled successfully: {output_path}")

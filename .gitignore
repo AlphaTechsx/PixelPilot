@@ -16,3 +16,4 @@ tests/
 .easyocr
 node_modules/
 resources/
+.easyocr-onnx/

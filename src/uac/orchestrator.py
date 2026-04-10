@@ -169,15 +169,19 @@ def _build_agent_command(*, base_path: str, request_path: str | None = None, dec
     if not clean_decision and not request:
         return None
 
-    agent_exe = os.path.join(base_path, "dist", "agent.exe")
     decision_arg = f'--decision "{clean_decision}"' if clean_decision else ""
     request_arg = f'--request "{request}"' if request else ""
     arg_fragment = decision_arg or request_arg
 
-    if os.path.exists(agent_exe):
-        cmd_line = f'"{agent_exe}" {arg_fragment}'.strip()
-        log_debug(f"Launching compiled agent: {cmd_line}")
-        return cmd_line
+    agent_candidates = [
+        os.path.join(base_path, "agent", "agent.exe"),
+        os.path.join(base_path, "dist", "agent.exe"),
+    ]
+    for agent_exe in agent_candidates:
+        if os.path.exists(agent_exe):
+            cmd_line = f'"{agent_exe}" {arg_fragment}'.strip()
+            log_debug(f"Launching compiled agent: {cmd_line}")
+            return cmd_line
 
     agent_script = os.path.join(base_path, "agent.py")
     python_exe = (

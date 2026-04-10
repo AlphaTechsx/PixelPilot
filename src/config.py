@@ -25,6 +25,23 @@ def _env_str(name: str, default: str = "") -> str:
     return value or str(default).strip()
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _local_appdata_dir() -> Path:
+    base_dir = os.environ.get("LOCALAPPDATA")
+    if base_dir:
+        return Path(base_dir).expanduser().resolve() / "PixelPilot"
+    return Path.home().resolve() / "AppData" / "Local" / "PixelPilot"
+
+
+def _runtime_writable_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return _local_appdata_dir()
+    return _project_root()
+
+
 class Config:
     BACKEND_URL = _env_str(
         "BACKEND_URL",
@@ -101,8 +118,9 @@ class Config:
     SCREENSHOT_DELAY = 0.5
 
     MAX_ELEMENTS_TO_ANALYZE = 100
-    PROJECT_ROOT = Path(__file__).resolve().parent.parent
-    MEDIA_DIR = str(PROJECT_ROOT / "media")
+    PROJECT_ROOT = _project_root()
+    APP_DATA_DIR = _runtime_writable_root()
+    MEDIA_DIR = str(APP_DATA_DIR / "media")
     SCREENSHOT_PATH = os.path.join(MEDIA_DIR, "screen.png")
     DEBUG_PATH = os.path.join(MEDIA_DIR, "debug_overlay.png")
     REF_PATH = os.path.join(MEDIA_DIR, "debug_reference.png")

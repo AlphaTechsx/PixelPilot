@@ -1,7 +1,7 @@
 {
   "name": "pixelpilot-desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "PixelPilot desktop app",
   "author": "PixelPilot",
   "type": "module",
@@ -53,6 +53,9 @@
     },
     "files": [
       "dist/**/*",
+      "!dist/win-unpacked{,/**}",
+      "!dist/__msi-x64{,/**}",
+      "!dist/*.msi",
       "!**/.env",
       "!**/.env.*"
     ],
@@ -61,10 +64,7 @@
         "from": "resources/runtime",
         "to": "runtime",
         "filter": [
-          "pixelpilot-runtime.exe",
-          "orchestrator.exe",
-          "agent.exe",
-          "wakeword/**"
+          "**/*"
         ]
       },
       {
@@ -74,6 +74,13 @@
       {
         "from": "resources/release-config.json",
         "to": "release-config.json"
+      },
+      {
+        "from": "resources/installer",
+        "to": "installer",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {

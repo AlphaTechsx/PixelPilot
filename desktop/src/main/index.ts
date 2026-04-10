@@ -1,7 +1,9 @@
 import { createRequire } from 'node:module';
+import fs from 'node:fs';
 import path from 'node:path';
 import { RuntimeBridgeClient } from './bridge-client.js';
 import { findDeepLinkArg, parsePixelPilotDeepLink, PIXELPILOT_PROTOCOL, type PixelPilotDeepLinkPayload } from './deep-link.js';
+import { parseLaunchMode } from './launch-mode.js';
 import { RuntimeProcessManager } from './runtime-process.js';
 import { StartupDefaultsStore } from './startup-defaults.js';
 import { WindowManager } from './window-manager.js';
@@ -9,6 +11,25 @@ import type { BridgeStatus, RuntimeEventEnvelope } from '../shared/types.js';
 
 const require = createRequire(import.meta.url);
 const { app } = require('electron') as typeof import('electron');
+
+function mainLogPath(): string {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (localAppData) {
+    return path.join(localAppData, 'PixelPilot', 'logs', 'electron-main.log');
+  }
+  return path.join(process.cwd(), 'logs', 'electron-main.log');
+}
+
+function traceMain(message: string): void {
+  try {
+    const filePath = mainLogPath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    const stamp = new Date().toISOString();
+    fs.appendFileSync(filePath, `${stamp} | ${message}\n`, 'utf8');
+  } catch {
+    // Best-effort startup tracing only.
+  }
+}
 
 function registerProtocolHandler(): void {
   if (process.defaultApp) {
@@ -45,6 +66,7 @@ let runtimeBridgeEndpoints: { controlUrl: string; sidecarUrl: string } | null = 
 let bridgeStatus: BridgeStatus = 'starting';
 let bridgeStatusMessage = 'Starting runtime...';
 let hasConnectedBridge = false;
+const launchMode = parseLaunchMode(process.argv);
 let pendingDeepLink: PixelPilotDeepLinkPayload | null = parsePixelPilotDeepLink(findDeepLinkArg(process.argv) ?? '');
 
 const BRIDGE_RECOVERY_GRACE_MS = 8000;
@@ -377,14 +399,24 @@ async function recoverRuntimeBridge(): Promise<void> {
 }
 
 async function bootstrap(): Promise<void> {
+  traceMain('bootstrap.enter');
   startupDefaultsStore = new StartupDefaultsStore(app.getPath('userData'));
   windowManager = new WindowManager(
     invokeRuntimeFromMain,
     startupDefaultsStore,
+    { launchToTray: launchMode.backgroundStartup },
   );
+  traceMain(`bootstrap.window_manager_ready launchToTray=${launchMode.backgroundStartup}`);
   setBridgeStatus('starting');
   windowManager.createWindows();
+  traceMain('bootstrap.windows_created');
   await beginBridgeClientStart({ reuseRuntime: false });
+  traceMain('bootstrap.bridge_client_started');
+  if (launchMode.backgroundStartup) {
+    void invokeRuntimeFromMain('shell.setBackgroundHidden', { hidden: true }).catch((error) => {
+      console.error('Failed to start PixelPilot in background mode.', error);
+    });
+  }
   void processPendingDeepLink();
 }
 
@@ -425,7 +457,9 @@ function queueDeepLink(rawUrl: string | null): void {
 }
 
 app.whenReady().then(() => {
+  traceMain('app.whenReady');
   void bootstrap().catch((error) => {
+    traceMain(`bootstrap.error ${(error as Error)?.message ?? String(error)}`);
     console.error('Failed to bootstrap PixelPilot Electron.', error);
     app.exit(1);
   });
@@ -438,6 +472,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  traceMain('app.before-quit');
   shuttingDown = true;
   clearBridgeRecoveryTimer();
   void bridgeClient?.sendCommand('runtime.shutdown').catch(() => undefined);

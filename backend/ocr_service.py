@@ -45,7 +45,7 @@ def _import_easyocr_onnx():
                 fill=fill,
             )
 
-        ascii_progress_bar._pixelpilot_ascii = True  # type: ignore[attr-defined]
+        ascii_progress_bar._pixelpilot_ascii = True
         torchfree_utils.printProgressBar = ascii_progress_bar
 
     return torchfree_ocr

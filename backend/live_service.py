@@ -527,14 +527,9 @@ class BackendLiveSession:
     ) -> dict[str, Any]:
         if reservation.window == rate_limiter.WINDOW_LIVE_CONCURRENT:
             message = "Another Gemini Live session is already active. Try again shortly."
-        elif reservation.window == rate_limiter.WINDOW_MINUTE:
-            message = (
-                f"Gemini Live start limit exceeded. Try again in "
-                f"{max(1, reservation.retry_after_seconds)}s."
-            )
         else:
             message = (
-                f"Gemini Live daily start limit exceeded ({reservation.limit} sessions). "
+                f"Gemini Live daily time limit exceeded ({reservation.limit // 60} minutes). "
                 f"Resets at midnight UTC."
             )
         return {

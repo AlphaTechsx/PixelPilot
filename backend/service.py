@@ -20,7 +20,7 @@ client = genai.Client(api_key=API_KEY)
 
 class GenerationRequest(BaseModel):
     model: str
-    contents: List[Dict[str, Any]]  # This will be the raw JSON structure for contents
+    contents: List[Dict[str, Any]]
     config: Optional[Dict[str, Any]] = None
 
 
@@ -71,7 +71,6 @@ def _sanitize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
     if not isinstance(schema, dict):
         return schema
 
-    # Create a copy to avoid modifying the original
     new_schema = schema.copy()
 
     if "additionalProperties" in new_schema:
@@ -91,13 +90,9 @@ def _sanitize_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
 
 async def generate_content(request: GenerationRequest):
     print(f"DEBUG: Processing request for model {request.model}")
-    # print(f"DEBUG: Config keys: {request.config.keys() if request.config else 'None'}")
-
     contents = _process_contents(request.contents)
 
     config_data = request.config or {}
-
-    # Extract tools if present
     tools_config = config_data.pop("tools", None)
     real_tools = None
     if tools_config:

@@ -41,6 +41,18 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function runtimeDiagnosticsHint(): string {
+  if (app.isPackaged) {
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      return ` See ${path.join(localAppData, 'PixelPilot', 'logs', 'runtime-bootstrap.log')} for startup details.`;
+    }
+  }
+
+  const repoRoot = path.resolve(__dirname, '..', '..', '..');
+  return ` See ${path.join(repoRoot, 'logs', 'runtime-bootstrap.log')} for startup details.`;
+}
+
 function loadPackagedReleaseConfig(): ReleaseConfig {
   if (!app.isPackaged) {
     return {};
@@ -202,7 +214,9 @@ export class RuntimeProcessManager {
       }
       if (this.child.exitCode !== null) {
         const signal = this.child.signalCode ? ` (signal: ${this.child.signalCode})` : '';
-        throw new Error(`PixelPilot runtime exited before the bridge was ready (code ${this.child.exitCode}${signal}).`);
+        throw new Error(
+          `PixelPilot runtime exited before the bridge was ready (code ${this.child.exitCode}${signal}).${runtimeDiagnosticsHint()}`
+        );
       }
       if (await canConnect(`ws://127.0.0.1:${this.port}/control?token=${this.token}`)) {
         return;
@@ -210,7 +224,7 @@ export class RuntimeProcessManager {
       await delay(BRIDGE_POLL_INTERVAL_MS);
     }
 
-    throw new Error('Timed out waiting for the PixelPilot runtime bridge to start.');
+    throw new Error(`Timed out waiting for the PixelPilot runtime bridge to start.${runtimeDiagnosticsHint()}`);
   }
 
   private resolveRuntimeLaunch(): {
@@ -225,8 +239,13 @@ export class RuntimeProcessManager {
     }
 
     if (app.isPackaged) {
-      const packagedRuntime = path.join(process.resourcesPath, 'runtime', 'pixelpilot-runtime.exe');
-      return { command: packagedRuntime, args: [] };
+      const packagedRuntime = path.join(
+        process.resourcesPath,
+        'runtime',
+        'pixelpilot-runtime',
+        'pixelpilot-runtime.exe'
+      );
+      return { command: packagedRuntime, args: [], cwd: path.dirname(packagedRuntime) };
     }
 
     const repoRoot = path.resolve(__dirname, '..', '..', '..');

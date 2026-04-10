@@ -88,6 +88,7 @@ GOOGLE_CLIENT_ID=your_google_client_id
 GOOGLE_CLIENT_SECRET=your_google_client_secret
 GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
 WEB_URL=http://localhost:5173
+LIVE_SESSION_SECONDS_PER_DAY=600
 ```
 
 ### Optional web development

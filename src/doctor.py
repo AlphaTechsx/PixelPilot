@@ -63,6 +63,7 @@ def run_doctor(
         _check_wakeword_assets(),
         _check_audio_devices(),
         _check_uac_tasks(),
+        _check_app_startup(),
         _check_bridge(runtime_service=runtime_service),
         _check_app_index(agent=agent or getattr(controller, "agent", None)),
         _check_extensions(extension_manager),
@@ -255,6 +256,65 @@ def _check_uac_tasks() -> DoctorCheck:
         status="ok",
         summary="Required UAC scheduled tasks are registered.",
         details={"tasks": task_names},
+    )
+
+
+def _check_app_startup() -> DoctorCheck:
+    if sys.platform != "win32":
+        return DoctorCheck(
+            name="app_startup",
+            status="warn",
+            summary="Startup entry verification is only available on Windows.",
+        )
+
+    try:
+        import winreg
+    except Exception as exc:
+        return DoctorCheck(
+            name="app_startup",
+            status="warn",
+            summary=f"Windows registry access is unavailable: {exc}",
+        )
+
+    key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    value_name = "PixelPilot"
+    checked_roots: list[str] = []
+
+    for root_name, root in (("HKLM", winreg.HKEY_LOCAL_MACHINE), ("HKCU", winreg.HKEY_CURRENT_USER)):
+        checked_roots.append(root_name)
+        try:
+            with winreg.OpenKey(root, key_path) as handle:
+                value, _ = winreg.QueryValueEx(handle, value_name)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+
+        command = str(value or "").strip()
+        has_background_arg = "--background-startup" in command.lower()
+        return DoctorCheck(
+            name="app_startup",
+            status="ok" if has_background_arg else "warn",
+            summary=(
+                "PixelPilot is registered to start in the background at user sign-in."
+                if has_background_arg
+                else "PixelPilot has a startup entry, but it is missing the background startup flag."
+            ),
+            details={
+                "root": root_name,
+                "command": command,
+                "valueName": value_name,
+            },
+        )
+
+    return DoctorCheck(
+        name="app_startup",
+        status="warn",
+        summary="PixelPilot is not registered to start automatically at sign-in.",
+        details={
+            "checkedRoots": checked_roots,
+            "valueName": value_name,
+        },
     )
 
 

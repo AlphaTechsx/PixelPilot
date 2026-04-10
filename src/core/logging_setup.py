@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 from logging.handlers import RotatingFileHandler
 from typing import Optional
 
@@ -150,14 +151,22 @@ def _repo_root_from_src() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
+def _default_log_dir() -> str:
+    if getattr(sys, "frozen", False):
+        base_dir = os.environ.get("LOCALAPPDATA")
+        if base_dir:
+            return os.path.join(base_dir, "PixelPilot", "logs")
+        return os.path.join(os.path.expanduser("~"), "AppData", "Local", "PixelPilot", "logs")
+    return os.path.join(_repo_root_from_src(), "logs")
+
+
 def configure_logging(*, adapter=None) -> tuple[logging.Logger, Optional[BufferingGuiHandler], str]:
     """Configure Pixel Pilot logging.
 
     Returns (logger, buffering_handler_if_any, log_file_path).
     """
 
-    repo_root = _repo_root_from_src()
-    log_dir = os.path.join(repo_root, "logs")
+    log_dir = _default_log_dir()
     os.makedirs(log_dir, exist_ok=True)
 
     log_file_path = os.path.join(log_dir, "pixelpilot.log")

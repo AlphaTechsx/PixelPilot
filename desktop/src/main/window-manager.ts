@@ -24,6 +24,9 @@ const electron = require('electron') as typeof import('electron');
 const { BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage, screen, shell } = electron;
 
 type InvokeRuntime = (method: string, payload?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+type WindowManagerOptions = {
+  launchToTray?: boolean;
+};
 
 export class WindowManager {
   private overlayWindow: BrowserWindowType | null = null;
@@ -43,10 +46,16 @@ export class WindowManager {
   private trayOnly = false;
   private readonly userMovedKinds = new Set<WindowKind>();
   private readonly programmaticMoveKinds = new Set<WindowKind>();
+  private launchToTrayPending: boolean;
 
-  constructor(invokeRuntime: InvokeRuntime, startupDefaultsStore: StartupDefaultsStore) {
+  constructor(
+    invokeRuntime: InvokeRuntime,
+    startupDefaultsStore: StartupDefaultsStore,
+    options: WindowManagerOptions = {},
+  ) {
     this.invokeRuntime = invokeRuntime;
     this.startupDefaultsStore = startupDefaultsStore;
+    this.launchToTrayPending = Boolean(options.launchToTray);
     this.registerIpc();
   }
 
@@ -86,7 +95,9 @@ export class WindowManager {
   applySnapshot(snapshot: RuntimeSnapshot): void {
     this.currentSnapshot = this.decorateSnapshot(snapshot);
     if (!snapshot.backgroundHidden || snapshot.auth.needsAuth) {
-      this.trayOnly = false;
+      if (!this.launchToTrayPending) {
+        this.trayOnly = false;
+      }
     }
     this.runtimeClickThrough = snapshot.auth.needsAuth ? false : snapshot.clickThroughEnabled;
     this.broadcastState(this.currentSnapshot);
@@ -149,7 +160,7 @@ export class WindowManager {
       height,
       icon: this.resolveIconPath(),
       frame: false,
-      show: kind === 'overlay',
+      show: kind === 'overlay' && !this.launchToTrayPending,
       transparent: true,
       resizable: false,
       hasShadow: false,
@@ -307,6 +318,13 @@ export class WindowManager {
       return;
     }
     const hidden = this.currentSnapshot.backgroundHidden && !this.currentSnapshot.auth.needsAuth;
+    if (this.launchToTrayPending) {
+      this.overlayWindow?.hide();
+      this.notchWindow?.hide();
+      this.sidecarWindow?.hide();
+      this.settingsWindow?.hide();
+      return;
+    }
     const trayOnly = hidden && this.trayOnly;
     if (trayOnly) {
       this.overlayWindow?.hide();
@@ -448,6 +466,10 @@ export class WindowManager {
   private async setBackgroundHidden(hidden: boolean): Promise<Record<string, unknown>> {
     const previousSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
     const previousTrayOnly = this.trayOnly;
+    const previousLaunchToTrayPending = this.launchToTrayPending;
+    if (!hidden) {
+      this.launchToTrayPending = false;
+    }
     this.trayOnly = false;
     if (this.currentSnapshot) {
       this.currentSnapshot = { ...this.currentSnapshot, backgroundHidden: hidden };
@@ -460,6 +482,7 @@ export class WindowManager {
     try {
       return await this.invokeRuntime('shell.setBackgroundHidden', { hidden });
     } catch (error) {
+      this.launchToTrayPending = previousLaunchToTrayPending;
       this.trayOnly = previousTrayOnly;
       if (previousSnapshot) {
         this.currentSnapshot = previousSnapshot;
@@ -473,8 +496,10 @@ export class WindowManager {
   private async setTrayOnly(enabled: boolean): Promise<Record<string, unknown>> {
     const previousSnapshot = this.currentSnapshot ? { ...this.currentSnapshot } : null;
     const previousTrayOnly = this.trayOnly;
+    const previousLaunchToTrayPending = this.launchToTrayPending;
     const hidden = enabled;
 
+    this.launchToTrayPending = false;
     this.trayOnly = enabled;
     if (this.currentSnapshot) {
       this.currentSnapshot = { ...this.currentSnapshot, backgroundHidden: hidden };
@@ -488,6 +513,7 @@ export class WindowManager {
     try {
       return await this.invokeRuntime('shell.setBackgroundHidden', { hidden });
     } catch (error) {
+      this.launchToTrayPending = previousLaunchToTrayPending;
       this.trayOnly = previousTrayOnly;
       if (previousSnapshot) {
         this.currentSnapshot = previousSnapshot;

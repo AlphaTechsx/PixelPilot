@@ -25,7 +25,6 @@ import live_service
 import rate_limiter
 from database import lifespan, get_db, get_redis
 
-# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("backend")
 
@@ -34,6 +33,7 @@ security = HTTPBearer(auto_error=False)
 
 GENERATION_ERROR_MESSAGE = "Generation failed"
 SERVICE_UNAVAILABLE_MESSAGE = "Service temporarily unavailable"
+OCR_SESSION_REQUIRED_MESSAGE = "OCR is only available during an active Gemini Live session."
 AUTH_DATABASE_UNAVAILABLE_MESSAGE = "Authentication database is unavailable. Please try again shortly."
 WS_AUTH_TIMEOUT_SECONDS = 10
 GOOGLE_AUTH_BASE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -42,7 +42,6 @@ GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 DESKTOP_FLOW_WEB_PATH = "/auth/complete"
 
 
-# Request/Response models
 class GenerateRequest(BaseModel):
     model: str
     contents: List[Dict[str, Any]]
@@ -209,13 +208,8 @@ async def _easyocr_with_rate_limit(
 ) -> Dict[str, Any]:
     if redis_client is None:
         raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE_MESSAGE)
-
-    reservation = await rate_limiter.reserve_ocr_request(user_id, redis_client)
-    if not reservation.allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=_build_rate_limit_detail(reservation),
-        )
+    if not await rate_limiter.has_active_live_session(user_id, redis_client):
+        raise HTTPException(status_code=403, detail=OCR_SESSION_REQUIRED_MESSAGE)
 
     try:
         logger.info("Running backend EasyOCR-ONNX for user %s", user_id)
@@ -226,14 +220,9 @@ async def _easyocr_with_rate_limit(
         )
     except Exception:
         logger.exception("EasyOCR-ONNX error for user %s", user_id)
-        try:
-            await rate_limiter.refund_ocr_request(reservation, redis_client)
-        except Exception:
-            logger.exception("Failed to refund OCR quota for user %s", user_id)
         raise HTTPException(status_code=500, detail="OCR failed")
 
     if isinstance(result, dict):
-        result["remaining_requests"] = reservation.daily_remaining
         return result
     raise HTTPException(status_code=500, detail="OCR failed")
 
@@ -247,13 +236,8 @@ async def _hosted_eye_with_rate_limit(
 ) -> Dict[str, Any]:
     if redis_client is None:
         raise HTTPException(status_code=503, detail=SERVICE_UNAVAILABLE_MESSAGE)
-
-    reservation = await rate_limiter.reserve_ocr_request(user_id, redis_client)
-    if not reservation.allowed:
-        raise HTTPException(
-            status_code=429,
-            detail=_build_rate_limit_detail(reservation),
-        )
+    if not await rate_limiter.has_active_live_session(user_id, redis_client):
+        raise HTTPException(status_code=403, detail=OCR_SESSION_REQUIRED_MESSAGE)
 
     try:
         logger.info("Running backend LocalCVEye for user %s", user_id)
@@ -264,19 +248,13 @@ async def _hosted_eye_with_rate_limit(
         )
     except Exception:
         logger.exception("Hosted eye error for user %s", user_id)
-        try:
-            await rate_limiter.refund_ocr_request(reservation, redis_client)
-        except Exception:
-            logger.exception("Failed to refund hosted eye quota for user %s", user_id)
         raise HTTPException(status_code=500, detail="Hosted eye failed")
 
     if isinstance(result, dict):
-        result["remaining_requests"] = reservation.daily_remaining
         return result
     raise HTTPException(status_code=500, detail="Hosted eye failed")
 
 
-# Auth dependency
 async def get_current_user(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> dict:
@@ -288,9 +266,6 @@ async def get_current_user(
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
     return user
-
-
-# ============ Auth Endpoints ============
 
 
 def _require_env(name: str) -> str:
@@ -537,9 +512,6 @@ async def google_callback(
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon() -> Response:
     return Response(status_code=204)
-
-
-# ============ Generation Endpoint (Protected) ============
 
 
 @app.post("/v1/generate")
@@ -978,9 +950,6 @@ async def ws_live(websocket: WebSocket):
                 await session.shutdown()
             except Exception:
                 logger.debug("Failed to shut down live session", exc_info=True)
-
-
-# ============ Health Check ============
 
 
 @app.get("/health")

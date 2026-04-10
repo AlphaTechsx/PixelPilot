@@ -20,7 +20,7 @@ from pydantic import BaseModel, EmailStr
 
 JWT_SECRET = os.getenv("JWT_SECRET", "default_secret_change_me")
 JWT_ALGORITHM = "HS256"
-JWT_EXPIRY_HOURS = 24 * 7  # 1 week
+JWT_EXPIRY_HOURS = 24 * 7
 
 OAUTH_STATE_TTL_SECONDS = 60 * 10
 DESKTOP_CODE_TTL_SECONDS = 60 * 5
