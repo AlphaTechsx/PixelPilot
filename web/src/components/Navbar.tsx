@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { motion, useScroll, useTransform } from 'framer-motion';
 import { Link, useLocation } from 'react-router-dom';
 import { Logo } from './Logo';
@@ -11,15 +11,13 @@ export const Navbar = () => {
     const y = useTransform(scrollY, [0, 100], [-100, 0]);
     const location = useLocation();
     const isHome = location.pathname === '/';
-    const [isMenuOpen, setIsMenuOpen] = useState(false);
-
-    useEffect(() => {
-        setIsMenuOpen(false);
-    }, [location.pathname]);
+    const [menuState, setMenuState] = useState({ pathname: location.pathname, isOpen: false });
+    const isMenuOpen = menuState.pathname === location.pathname && menuState.isOpen;
+    const closeMenu = () => setMenuState({ pathname: location.pathname, isOpen: false });
 
     const scrollToSection = (id: string) => {
         document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-        setIsMenuOpen(false);
+        closeMenu();
     };
 
     return (
@@ -46,7 +44,7 @@ export const Navbar = () => {
                         className="navbar-menu-toggle"
                         aria-label={isMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
                         aria-expanded={isMenuOpen}
-                        onClick={() => setIsMenuOpen((open) => !open)}
+                        onClick={() => setMenuState({ pathname: location.pathname, isOpen: !isMenuOpen })}
                     >
                         <span />
                         <span />
@@ -82,7 +80,7 @@ export const Navbar = () => {
                                 target="_blank"
                                 rel="noreferrer"
                                 className="nav-link"
-                                onClick={() => setIsMenuOpen(false)}
+                                onClick={closeMenu}
                             >
                                 GitHub
                             </a>
