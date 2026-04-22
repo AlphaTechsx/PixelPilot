@@ -18,7 +18,11 @@ import {
   PanelTop,
   Search,
   Shield,
-  X
+  X,
+  Globe,
+  Cpu,
+  ChevronRight,
+  Info
 } from 'lucide-react';
 import type {
   ActionUpdate,
@@ -756,7 +760,7 @@ function PixelPilotLogo({ className = '' }: { className?: string }): React.JSX.E
 
   return (
     <svg
-      viewBox="0 -20 250 270"
+      viewBox="0 0 512 512"
       aria-hidden="true"
       focusable="false"
       className={className}
@@ -767,12 +771,14 @@ function PixelPilotLogo({ className = '' }: { className?: string }): React.JSX.E
           <stop offset="100%" stopColor="#4ec9b0" />
         </linearGradient>
       </defs>
-      <path
-        d="M0 0h160c40 0 72 32 72 72v28c0 40-32 72-72 72H60v78H0V0Z"
-        fill={`url(#${gradientId})`}
-      />
-      <rect x="60" y="60" width="100" height="52" rx="4" fill="#0f172a" />
-      <path d="M180 -20h70V50Z" fill="#fff" />
+      <g transform="translate(140, 130)">
+        <path
+          d="M 0 0 H 160 C 200 0 232 32 232 72 V 100 C 232 140 200 172 160 172 H 60 V 250 H 0 V 0 Z"
+          fill={`url(#${gradientId})`}
+        />
+        <rect x="60" y="60" width="100" height="52" rx="4" fill="currentColor" />
+        <path d="M 180 -20 L 250 -20 L 250 50 Z" fill="#FFFFFF" />
+      </g>
     </svg>
   );
 }
@@ -1352,6 +1358,7 @@ function AuthGate({
   onQuit: () => Promise<void>;
 }): React.JSX.Element {
   const cardRef = useRef<HTMLDivElement | null>(null);
+  const [activeTab, setActiveTab] = useState<'cloud' | 'direct'>(auth.directApi ? 'direct' : 'cloud');
   const configuredProvider = normalizeDirectApiProviderId(auth.requestProvider?.provider_id);
   const configuredBaseUrl = String(auth.requestProvider?.base_url || '').trim();
   const [browserCode, setBrowserCode] = useState('');
@@ -1362,14 +1369,17 @@ function AuthGate({
   const [localError, setLocalError] = useState('');
   const [statusText, setStatusText] = useState('');
   const [statusIsError, setStatusIsError] = useState(false);
+
   useMeasuredWindowLayout(cardRef, {
-    width: 420,
-    height: 940
+    width: 440,
+    height: 580
   });
+
   useEffect(() => {
     setSelectedProvider(configuredProvider);
     setBaseUrl(configuredBaseUrl);
   }, [configuredProvider, configuredBaseUrl]);
+
   const directProvider = normalizeDirectApiProviderId(selectedProvider);
   const selectedProviderOption =
     directApiProviderOptions.find((option) => option.id === directProvider) || directApiProviderOptions[0];
@@ -1377,12 +1387,12 @@ function AuthGate({
   const startBrowser = async (mode: 'signin' | 'signup') => {
     setSubmitting(true);
     setLocalError('');
-    setStatusText(mode === 'signup' ? 'Opening browser for account creation...' : 'Opening browser for sign-in...');
+    setStatusText(mode === 'signup' ? 'Connecting to browser...' : 'Opening sign-in...');
     setStatusIsError(false);
     try {
       await onStartBrowserFlow(mode);
     } catch (error) {
-      setLocalError(error instanceof Error ? error.message : 'Browser sign-in failed.');
+      setLocalError(error instanceof Error ? error.message : 'Action failed.');
       setStatusText('');
     } finally {
       setSubmitting(false);
@@ -1392,20 +1402,19 @@ function AuthGate({
   const submitBrowserCode = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!browserCode.trim()) {
-      setLocalError('');
-      setStatusText('Please enter the browser code');
+      setStatusText('Please enter code');
       setStatusIsError(true);
       return;
     }
     setSubmitting(true);
     setLocalError('');
-    setStatusText('Completing sign-in...');
+    setStatusText('Authenticating...');
     setStatusIsError(false);
     try {
       await onExchangeCode(browserCode);
       setBrowserCode('');
     } catch (error) {
-      setLocalError(error instanceof Error ? error.message : 'Code exchange failed.');
+      setLocalError(error instanceof Error ? error.message : 'Authentication failed.');
       setStatusText('');
     } finally {
       setSubmitting(false);
@@ -1415,20 +1424,13 @@ function AuthGate({
   const submitApiKey = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (selectedProviderOption.requiresKey && !apiKey.trim()) {
-      setLocalError('');
-      setStatusText('Please enter an API Key');
-      setStatusIsError(true);
-      return;
-    }
-    if (directProvider === 'gemini' && !apiKey.trim().startsWith('AIza')) {
-      setLocalError('');
-      setStatusText('Invalid API Key format (should start with AIza)');
+      setStatusText('API Key is required');
       setStatusIsError(true);
       return;
     }
     setSubmitting(true);
     setLocalError('');
-    setStatusText(directProvider === 'ollama' ? 'Connecting provider...' : 'Verifying key...');
+    setStatusText('Connecting provider...');
     setStatusIsError(false);
     try {
       await onUseApiKey(apiKey, {
@@ -1437,161 +1439,202 @@ function AuthGate({
       });
       setApiKey('');
     } catch (error) {
-      setLocalError(error instanceof Error ? error.message : 'API key setup failed.');
+      setLocalError(error instanceof Error ? error.message : 'Connection failed.');
       setStatusText('');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const requestQuit = async (): Promise<void> => {
-    setLocalError('');
-    setStatusText('');
-    try {
-      await onQuit();
-    } catch (error) {
-      setLocalError(error instanceof Error ? error.message : 'Quit failed.');
-    }
-  };
-
   return (
     <motion.div
-      className="mx-auto w-[420px]"
-      initial={{ opacity: 0, y: -12 }}
+      className="mx-auto w-[440px] p-6"
+      initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
     >
       <div
         ref={cardRef}
-        className="drag-region relative overflow-hidden rounded-2xl border border-[rgb(52_78_102_/_0.72)] bg-[rgb(18_30_44_/_0.96)] px-8 pb-8 pt-7 shadow-[0_24px_70px_rgb(3_10_18_/_0.45)]"
+        className="drag-region relative flex flex-col overflow-hidden rounded-[24px] border border-[#2d3748] bg-[#1a202c] shadow-[0_20px_50px_rgba(0,0,0,0.3)]"
       >
+        {/* Close Button */}
         <button
           type="button"
-          aria-label="Close login dialog"
-          onClick={() => void requestQuit()}
-          className="no-drag absolute right-3 top-3 flex h-7 w-7 items-center justify-center rounded-full text-[18px] font-bold text-[rgb(207_233_255_/_0.4)] transition hover:bg-[rgb(255_107_107_/_0.2)] hover:text-[#ff6b6b]"
+          onClick={() => void onQuit()}
+          className="no-drag absolute right-4 top-4 z-20 flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-white/5 hover:text-white"
         >
           <X className="h-4 w-4" />
         </button>
 
-        <div className="flex justify-center">
-          <div className="flex h-[50px] w-[50px] items-center justify-center">
-            <PixelPilotLogo className="h-[50px] w-[50px]" />
+        {/* Header */}
+        <div className="px-8 pt-8 text-center">
+          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-800">
+            <PixelPilotLogo className="h-7 w-7 text-slate-800" />
+          </div>
+          <h1 className="mt-4 text-xl font-bold text-white">Sign In to PixelPilot</h1>
+          <p className="mt-1 text-sm text-slate-400">Command your desktop with autonomous precision</p>
+        </div>
+
+        {/* Tabs */}
+        <div className="no-drag mt-6 flex px-8">
+          <div className="flex w-full border-b border-slate-800">
+            <button
+              onClick={() => setActiveTab('cloud')}
+              className={`relative flex-1 py-3 text-sm font-semibold transition-colors ${activeTab === 'cloud' ? 'text-blue-400' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              Cloud Account
+              {activeTab === 'cloud' && (
+                <motion.div layoutId="tabLine" className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500" />
+              )}
+            </button>
+            <button
+              onClick={() => setActiveTab('direct')}
+              className={`relative flex-1 py-3 text-sm font-semibold transition-colors ${activeTab === 'direct' ? 'text-blue-400' : 'text-slate-500 hover:text-slate-300'}`}
+            >
+              Direct Connection
+              {activeTab === 'direct' && (
+                <motion.div layoutId="tabLine" className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-500" />
+              )}
+            </button>
           </div>
         </div>
 
-        <div className="mt-4 text-center">
-          <h1 className="text-[22px] font-bold tracking-[0.01em] text-[#cfe9ff]">Welcome Back</h1>
-          <p className="mx-auto mt-3 max-w-[270px] text-[12px] leading-5 text-[rgb(207_233_255_/_0.6)]">
-            Sign in or create your account in the browser, then return here automatically.
+        {/* Content Area */}
+        <div className="no-drag flex-1 px-8 py-6">
+          <AnimatePresence mode="wait">
+            {activeTab === 'cloud' ? (
+              <motion.div
+                key="cloud"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                className="space-y-6"
+              >
+                <div className="space-y-3">
+                  <button
+                    disabled={submitting}
+                    onClick={() => void startBrowser('signin')}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#2563eb] py-3 text-sm font-bold text-white transition-colors hover:bg-[#1d4ed8] disabled:opacity-50 shadow-sm"
+                  >
+                    <Globe className="h-4 w-4" /> Sign In in Browser
+                  </button>
+
+                  <button
+                    disabled={submitting}
+                    onClick={() => void startBrowser('signup')}
+                    className="w-full rounded-xl bg-slate-800 py-3 text-sm font-semibold text-white transition-colors hover:bg-slate-700"
+                  >
+                    Create Account
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-slate-800" />
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Manual Entry</span>
+                  <div className="h-px flex-1 bg-slate-800" />
+                </div>
+
+                <form onSubmit={submitBrowserCode} className="space-y-3">
+                  <input
+                    type="text"
+                    value={browserCode}
+                    onChange={(e) => setBrowserCode(e.target.value)}
+                    placeholder="Enter authentication code"
+                    className="w-full rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-sm text-white placeholder:text-slate-600 outline-none focus:border-blue-500"
+                  />
+                  <button
+                    type="submit"
+                    disabled={submitting || !browserCode}
+                    className="w-full rounded-xl border border-slate-700 bg-transparent py-3 text-sm font-bold text-slate-300 transition-colors hover:bg-slate-800 disabled:opacity-40"
+                  >
+                    Submit Code
+                  </button>
+                </form>
+              </motion.div>
+            ) : (
+              <motion.div
+                key="direct"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                className="space-y-5"
+              >
+                <div className="grid gap-2">
+                  <label className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Model Provider</label>
+                  <div className="relative">
+                    <select
+                      value={directProvider}
+                      onChange={(e) => setSelectedProvider(e.target.value)}
+                      className="w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+                    >
+                      {directApiProviderOptions.map((opt) => (
+                        <option key={opt.id} value={opt.id}>{opt.label}</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2">
+                      <ChevronRight className="h-4 w-4 rotate-90 text-slate-600" />
+                    </div>
+                  </div>
+                </div>
+
+                <form onSubmit={submitApiKey} className="space-y-4">
+                  {selectedProviderOption.requiresKey && (
+                    <div className="grid gap-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-600">API Key</label>
+                      <input
+                        type="password"
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        placeholder={selectedProviderOption.placeholder}
+                        className="w-full rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-sm text-white placeholder:text-slate-600 outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  )}
+
+                  {selectedProviderOption.supportsBaseUrl && (
+                    <div className="grid gap-2">
+                      <label className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Endpoint URL</label>
+                      <input
+                        type="url"
+                        value={baseUrl}
+                        onChange={(e) => setBaseUrl(e.target.value)}
+                        placeholder={selectedProviderOption.baseUrlPlaceholder}
+                        className="w-full rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-sm text-white placeholder:text-slate-600 outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  )}
+
+                  {!selectedProviderOption.requiresKey && directProvider === 'ollama' && (
+                    <div className="flex gap-3 rounded-xl bg-slate-800/50 p-4 border border-slate-700">
+                      <Info className="h-4 w-4 shrink-0 text-blue-400" />
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Local Ollama instance detected. No key required.
+                      </p>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={submitting}
+                    className="w-full rounded-xl bg-blue-600 py-3 text-sm font-bold text-white transition-colors hover:bg-blue-500 disabled:opacity-50"
+                  >
+                    Connect
+                  </button>
+                </form>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Footer Status */}
+        <div className="mt-auto border-t border-slate-800 bg-slate-900/50 px-8 py-4">
+          <p className={`text-center text-[11px] font-medium transition-colors ${
+            localError || runtimeError || statusIsError ? 'text-rose-400' : 'text-slate-500'
+          }`}>
+            {localError || runtimeError || statusText || 'Your session is encrypted and secure.'}
           </p>
-        </div>
-
-        <div className="mt-8 grid gap-3">
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => void startBrowser('signin')}
-            className="no-drag mt-6 min-h-[44px] rounded-[10px] border border-[#5fa6e8] bg-[#3e80c4] px-4 py-3 text-[13px] font-bold tracking-[0.04em] text-white transition hover:bg-[#4a8fd7] disabled:opacity-45"
-          >
-            {submitting ? 'Opening Browser...' : 'Sign In In Browser'}
-          </button>
-
-          <button
-            type="button"
-            disabled={submitting}
-            onClick={() => void startBrowser('signup')}
-            className="no-drag min-h-[44px] rounded-[10px] border border-[rgb(52_78_102_/_0.72)] bg-transparent px-4 py-3 text-[12px] font-semibold text-[#cfe9ff] transition hover:border-[#057FCA] hover:bg-[rgb(52_78_102_/_0.32)] disabled:opacity-45"
-          >
-            Create Account In Browser
-          </button>
-        </div>
-
-        <div className="mt-7 text-center text-[11px] text-[rgb(207_233_255_/_0.5)]">
-          If the browser does not return here automatically, paste the one-time browser code.
-        </div>
-
-        <form className="mt-3 grid gap-3" onSubmit={(event) => void submitBrowserCode(event)}>
-          <input
-            type="text"
-            value={browserCode}
-            onChange={(event) => setBrowserCode(event.target.value)}
-            placeholder="Enter browser code"
-            className="no-drag min-h-[42px] rounded-[10px] border border-[rgb(52_78_102_/_0.72)] bg-[rgb(20_36_54_/_0.78)] px-3.5 py-2.5 text-[13px] text-[#e5f3ff] outline-none transition placeholder:text-[rgb(207_233_255_/_0.4)] focus:border-[#057FCA]"
-          />
-          <button
-            type="submit"
-            disabled={submitting}
-            className="no-drag min-h-[44px] rounded-[10px] border border-[rgb(52_78_102_/_0.72)] bg-transparent px-4 py-3 text-[12px] font-semibold text-[#cfe9ff] transition hover:border-[#057FCA] hover:bg-[rgb(52_78_102_/_0.32)] disabled:opacity-45"
-          >
-            {submitting ? 'Completing Sign-In...' : 'Continue With Browser Code'}
-          </button>
-        </form>
-
-        <div className="mt-8 text-center text-[11px] text-[rgb(207_233_255_/_0.5)]">
-          Or connect your own model provider for direct mode
-        </div>
-
-        <form className="mt-3 grid gap-3" onSubmit={(event) => void submitApiKey(event)}>
-          <label className="no-drag grid gap-1.5 text-[11px] font-semibold text-[rgb(207_233_255_/_0.68)]">
-            Model provider
-            <select
-              value={directProvider}
-              onChange={(event) => {
-                setSelectedProvider(event.target.value);
-                setLocalError('');
-                setStatusText('');
-              }}
-              className="no-drag min-h-[42px] rounded-lg border border-[rgb(52_78_102_/_0.72)] bg-[rgb(20_36_54_/_0.92)] px-3 py-2.5 text-[13px] font-medium text-[#e5f3ff] outline-none transition focus:border-[#057FCA]"
-            >
-              {directApiProviderOptions.map((option) => (
-                <option key={option.id} value={option.id}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {selectedProviderOption.requiresKey ? (
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              placeholder={selectedProviderOption.placeholder}
-              className="no-drag min-h-[42px] rounded-[10px] border border-[rgb(52_78_102_/_0.72)] bg-[rgb(20_36_54_/_0.78)] px-3.5 py-2.5 text-[13px] text-[#e5f3ff] outline-none transition placeholder:text-[rgb(207_233_255_/_0.4)] focus:border-[#057FCA]"
-            />
-          ) : (
-            <div className="no-drag rounded-lg border border-[rgb(52_78_102_/_0.48)] bg-[rgb(20_36_54_/_0.5)] px-3.5 py-2.5 text-[11px] leading-5 text-[rgb(207_233_255_/_0.68)]">
-              Ollama runs locally, so an API key is not required.
-            </div>
-          )}
-
-          {selectedProviderOption.supportsBaseUrl && (
-            <input
-              type="url"
-              value={baseUrl}
-              onChange={(event) => setBaseUrl(event.target.value)}
-              placeholder={selectedProviderOption.baseUrlPlaceholder}
-              className="no-drag min-h-[42px] rounded-[10px] border border-[rgb(52_78_102_/_0.72)] bg-[rgb(20_36_54_/_0.78)] px-3.5 py-2.5 text-[13px] text-[#e5f3ff] outline-none transition placeholder:text-[rgb(207_233_255_/_0.4)] focus:border-[#057FCA]"
-            />
-          )}
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="no-drag min-h-[44px] rounded-[10px] border border-[rgb(52_78_102_/_0.72)] bg-transparent px-4 py-3 text-[12px] font-semibold text-[#cfe9ff] transition hover:border-[#057FCA] hover:bg-[rgb(52_78_102_/_0.32)] disabled:opacity-45"
-          >
-            {submitting ? 'Connecting...' : directProvider === 'ollama' ? 'Use Ollama' : 'Use API Key'}
-          </button>
-        </form>
-
-        <div className="mt-4 min-h-[20px] text-center text-[11px]">
-          <span
-            className={
-              localError || runtimeError || statusIsError ? 'text-[#ff6b6b]' : 'text-[rgb(207_233_255_/_0.6)]'
-            }
-          >
-            {localError || runtimeError || statusText}
-          </span>
         </div>
       </div>
     </motion.div>
