@@ -1257,6 +1257,7 @@ function StartupDefaultsSection({
 type DirectApiKeyOptions = {
   provider: string;
   baseUrl?: string;
+  model?: string;
 };
 
 const directApiProviderOptions = [
@@ -1266,7 +1267,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste Gemini API key (starts with AIza...)',
     requiresKey: true,
     supportsBaseUrl: false,
-    baseUrlPlaceholder: ''
+    baseUrlPlaceholder: '',
+    supportsModel: false
   },
   {
     id: 'openai',
@@ -1274,7 +1276,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste OpenAI API key',
     requiresKey: true,
     supportsBaseUrl: false,
-    baseUrlPlaceholder: ''
+    baseUrlPlaceholder: '',
+    supportsModel: false
   },
   {
     id: 'anthropic',
@@ -1282,7 +1285,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste Anthropic API key',
     requiresKey: true,
     supportsBaseUrl: false,
-    baseUrlPlaceholder: ''
+    baseUrlPlaceholder: '',
+    supportsModel: false
   },
   {
     id: 'xai',
@@ -1290,7 +1294,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste xAI API key',
     requiresKey: true,
     supportsBaseUrl: false,
-    baseUrlPlaceholder: ''
+    baseUrlPlaceholder: '',
+    supportsModel: false
   },
   {
     id: 'openrouter',
@@ -1298,7 +1303,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste OpenRouter API key',
     requiresKey: true,
     supportsBaseUrl: false,
-    baseUrlPlaceholder: ''
+    baseUrlPlaceholder: '',
+    supportsModel: true
   },
   {
     id: 'vercel_ai_gateway',
@@ -1306,7 +1312,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste Vercel AI Gateway key',
     requiresKey: true,
     supportsBaseUrl: true,
-    baseUrlPlaceholder: 'https://ai-gateway.vercel.sh/v1'
+    baseUrlPlaceholder: 'https://ai-gateway.vercel.sh/v1',
+    supportsModel: true
   },
   {
     id: 'ollama',
@@ -1314,7 +1321,9 @@ const directApiProviderOptions = [
     placeholder: '',
     requiresKey: false,
     supportsBaseUrl: true,
-    baseUrlPlaceholder: 'http://localhost:11434'
+    baseUrlPlaceholder: 'http://localhost:11434',
+    supportsModel: true,
+    supportsDiscovery: true
   },
   {
     id: 'openai_compatible',
@@ -1322,7 +1331,8 @@ const directApiProviderOptions = [
     placeholder: 'Paste API key',
     requiresKey: true,
     supportsBaseUrl: true,
-    baseUrlPlaceholder: 'http://localhost:8000/v1'
+    baseUrlPlaceholder: 'http://localhost:8000/v1',
+    supportsModel: true
   }
 ] as const;
 
@@ -1361,10 +1371,14 @@ function AuthGate({
   const [activeTab, setActiveTab] = useState<'cloud' | 'direct'>(auth.directApi ? 'direct' : 'cloud');
   const configuredProvider = normalizeDirectApiProviderId(auth.requestProvider?.provider_id);
   const configuredBaseUrl = String(auth.requestProvider?.base_url || '').trim();
+  const configuredModel = String(auth.requestProvider?.model || '').trim();
   const [browserCode, setBrowserCode] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [selectedProvider, setSelectedProvider] = useState(configuredProvider);
   const [baseUrl, setBaseUrl] = useState(configuredBaseUrl);
+  const [modelName, setModelName] = useState(configuredModel);
+  const [discoveredModels, setDiscoveredModels] = useState<string[]>([]);
+  const [isDiscovering, setIsDiscovering] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState('');
   const [statusText, setStatusText] = useState('');
@@ -1372,17 +1386,45 @@ function AuthGate({
 
   useMeasuredWindowLayout(cardRef, {
     width: 440,
-    height: 580
+    height: 620
   });
 
   useEffect(() => {
     setSelectedProvider(configuredProvider);
     setBaseUrl(configuredBaseUrl);
-  }, [configuredProvider, configuredBaseUrl]);
+    setModelName(configuredModel);
+  }, [configuredProvider, configuredBaseUrl, configuredModel]);
 
   const directProvider = normalizeDirectApiProviderId(selectedProvider);
   const selectedProviderOption =
     directApiProviderOptions.find((option) => option.id === directProvider) || directApiProviderOptions[0];
+
+  useEffect(() => {
+    if (directProvider === 'ollama') {
+      void discoverOllamaModels();
+    } else {
+      setDiscoveredModels([]);
+    }
+  }, [directProvider, baseUrl]);
+
+  const discoverOllamaModels = async () => {
+    setIsDiscovering(true);
+    try {
+      const result = await window.pixelPilot.invokeRuntime('ollama.listModels', {
+        baseUrl: baseUrl || 'http://localhost:11434'
+      });
+      if (result && Array.isArray(result.models)) {
+        setDiscoveredModels(result.models);
+        if (result.models.length > 0 && !modelName) {
+          setModelName(result.models[0]);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to discover Ollama models:', err);
+    } finally {
+      setIsDiscovering(false);
+    }
+  };
 
   const startBrowser = async (mode: 'signin' | 'signup') => {
     setSubmitting(true);
@@ -1435,7 +1477,8 @@ function AuthGate({
     try {
       await onUseApiKey(apiKey, {
         provider: directProvider,
-        baseUrl: selectedProviderOption.supportsBaseUrl ? baseUrl : ''
+        baseUrl: selectedProviderOption.supportsBaseUrl ? baseUrl : '',
+        model: modelName
       });
       setApiKey('');
     } catch (error) {
@@ -1593,6 +1636,47 @@ function AuthGate({
                     </div>
                   )}
 
+                  {selectedProviderOption.supportsModel && (
+                    <div className="grid gap-2">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Model Name</label>
+                        {directProvider === 'ollama' && (
+                          <button
+                            type="button"
+                            onClick={() => void discoverOllamaModels()}
+                            className="text-[10px] font-bold text-blue-400 hover:text-blue-300 transition-colors uppercase tracking-widest"
+                          >
+                            {isDiscovering ? 'Discovering...' : 'Refresh List'}
+                          </button>
+                        )}
+                      </div>
+                      {directProvider === 'ollama' && discoveredModels.length > 0 ? (
+                        <div className="relative">
+                          <select
+                            value={modelName}
+                            onChange={(e) => setModelName(e.target.value)}
+                            className="w-full appearance-none rounded-xl border border-slate-700 bg-slate-900 px-4 py-3 text-sm text-white outline-none focus:border-blue-500"
+                          >
+                            {discoveredModels.map((m) => (
+                              <option key={m} value={m}>{m}</option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2">
+                            <ChevronRight className="h-4 w-4 rotate-90 text-slate-600" />
+                          </div>
+                        </div>
+                      ) : (
+                        <input
+                          type="text"
+                          value={modelName}
+                          onChange={(e) => setModelName(e.target.value)}
+                          placeholder="e.g. llama3.2, gemini-2.0-flash"
+                          className="w-full rounded-xl border border-slate-700 bg-slate-900/50 px-4 py-3 text-sm text-white placeholder:text-slate-600 outline-none focus:border-blue-500"
+                        />
+                      )}
+                    </div>
+                  )}
+
                   {selectedProviderOption.supportsBaseUrl && (
                     <div className="grid gap-2">
                       <label className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Endpoint URL</label>
@@ -1610,7 +1694,7 @@ function AuthGate({
                     <div className="flex gap-3 rounded-xl bg-slate-800/50 p-4 border border-slate-700">
                       <Info className="h-4 w-4 shrink-0 text-blue-400" />
                       <p className="text-xs text-slate-400 leading-relaxed">
-                        Local Ollama instance detected. No key required.
+                        Local Ollama instance detected. {discoveredModels.length > 0 ? `${discoveredModels.length} models found.` : 'Ensure Ollama is running.'}
                       </p>
                     </div>
                   )}
@@ -3761,12 +3845,16 @@ export default function App(): React.JSX.Element {
       onUseApiKey={(apiKey, options) => {
         const provider = String(options.provider || '').trim();
         const baseUrl = String(options.baseUrl || '').trim();
+        const model = String(options.model || '').trim();
         const payload: Record<string, unknown> = { apiKey };
         if (provider) {
           payload.provider = provider;
         }
         if (baseUrl) {
           payload.baseUrl = baseUrl;
+        }
+        if (model) {
+          payload.model = model;
         }
         return window.pixelPilot.invokeRuntime('auth.useApiKey', payload).then(() => undefined);
       }}

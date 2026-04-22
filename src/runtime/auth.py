@@ -38,7 +38,13 @@ def get_auth_state() -> dict[str, Any]:
     }
 
 
-def save_api_key(value: str, *, provider_id: str | None = None, base_url: str | None = None) -> dict[str, Any]:
+def save_api_key(
+    value: str,
+    *,
+    provider_id: str | None = None,
+    base_url: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
     provider = normalize_provider_id(provider_id or Config.MODEL_PROVIDER)
     if provider == "ollama":
         api_key = ""
@@ -52,12 +58,15 @@ def save_api_key(value: str, *, provider_id: str | None = None, base_url: str | 
         raise RuntimeError(f"Direct API key storage is not supported for provider: {provider}")
 
     base_url = str(base_url or "").strip()
+    model = str(model or "").strip()
     env_updates: dict[str, str] = {
         "PIXELPILOT_MODEL_PROVIDER": provider,
         "PIXELPILOT_LIVE_PROVIDER": provider,
     }
     if key_env:
         env_updates[key_env] = api_key
+    if model:
+        env_updates["PIXELPILOT_MODEL"] = model
     if provider == "ollama" and base_url:
         env_updates["OLLAMA_BASE_URL"] = base_url
     elif provider == "openai_compatible" and base_url:
@@ -65,7 +74,6 @@ def save_api_key(value: str, *, provider_id: str | None = None, base_url: str | 
     elif provider == "vercel_ai_gateway" and base_url:
         env_updates["VERCEL_AI_GATEWAY_BASE_URL"] = base_url
 
-    api_key = str(value or "").strip()
     env_path = Path(Config.PROJECT_ROOT) / ".env"
     lines: list[str] = []
     if env_path.exists():
@@ -86,6 +94,8 @@ def save_api_key(value: str, *, provider_id: str | None = None, base_url: str | 
     Config.LIVE_PROVIDER = provider
     if key_env:
         setattr(Config, key_env, api_key)
+    if model:
+        Config.MODEL_NAME = model
     if provider == "ollama" and base_url:
         Config.OLLAMA_BASE_URL = base_url
     elif provider == "openai_compatible" and base_url:

@@ -288,6 +288,8 @@ class ElectronRuntimeService(QObject):
             return self._auth_use_api_key(body)
         if command == "auth.logout":
             return self._auth_logout()
+        if command == "ollama.listModels":
+            return self._ollama_list_models(body)
         if command == "live.submitText":
             return self.controller.handle_user_command(body.get("text"))
         if command == "doctor.run":
@@ -476,6 +478,7 @@ class ElectronRuntimeService(QObject):
             str(payload.get("apiKey") or ""),
             provider_id=str(payload.get("provider") or ""),
             base_url=str(payload.get("baseUrl") or ""),
+            model=str(payload.get("model") or ""),
         )
         self.controller.refresh_live_runtime()
         self.bridge_server.publish_event("auth.changed", {"auth": auth_state})
@@ -488,3 +491,17 @@ class ElectronRuntimeService(QObject):
         self.bridge_server.publish_state_updated()
         QTimer.singleShot(0, self.controller.refresh_live_runtime)
         return {"auth": auth_state}
+
+    def _ollama_list_models(self, payload: dict[str, Any]) -> dict[str, Any]:
+        import json
+        from urllib import request
+        base_url = str(payload.get("baseUrl") or Config.OLLAMA_BASE_URL or "http://localhost:11434").rstrip("/")
+        url = f"{base_url}/api/tags"
+        try:
+            with request.urlopen(url, timeout=3.0) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                models = [str(item["name"]) for item in data.get("models", [])]
+                return {"models": sorted(models)}
+        except Exception as exc:
+            logger.debug("Failed to list Ollama models at %s: %s", url, exc)
+            return {"models": [], "error": str(exc)}
