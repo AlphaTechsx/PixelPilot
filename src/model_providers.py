@@ -10,8 +10,6 @@ from shared.provider_catalog import (
     PROVIDER_BASE_URL_ENVS,
     PROVIDER_DISPLAY_NAMES,
     PROVIDER_KEY_ENVS,
-    api_key_for as _catalog_api_key_for,
-    base_url_for as _catalog_base_url_for,
     litellm_model_name,
     normalize_provider_id,
 )
