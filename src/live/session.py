@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import audioop
 import asyncio
+import datetime as dt
 import io
 import json
 import logging
@@ -108,6 +109,8 @@ class LiveSessionManager(QObject):
         self._speaker_backlog_logged_at = 0.0
         self._speaker_backpressure_logged_at = 0.0
         self._audio_resample_logged_at = 0.0
+        self._live_rate_limited_until_monotonic = 0.0
+        self._live_rate_limit_message = ""
         self._last_guidance_snapshot_signature = ""
         self._last_guidance_probe_sent_at = 0.0
         self._turn_state_lock = threading.Lock()
@@ -527,6 +530,51 @@ class LiveSessionManager(QObject):
     def _clear_manual_disconnect_request(self) -> None:
         self._manual_disconnect_requested = False
 
+    def _rate_limit_cooldown_seconds(self, exc: RateLimitError) -> int:
+        retry_after = getattr(exc, "retry_after_seconds", None)
+        if isinstance(retry_after, (int, float)) and retry_after > 0:
+            return max(1, min(24 * 60 * 60, int(math.ceil(float(retry_after)))))
+
+        message = str(exc or "").strip().lower()
+        if "midnight utc" in message or "daily time limit exceeded" in message:
+            now_utc = dt.datetime.now(dt.timezone.utc)
+            next_midnight = (now_utc + dt.timedelta(days=1)).replace(
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
+            )
+            seconds = int(math.ceil((next_midnight - now_utc).total_seconds()))
+            return max(60, min(24 * 60 * 60, seconds))
+
+        if "rate limit" in message:
+            return 30
+        return 20
+
+    def _apply_rate_limit_cooldown(self, exc: RateLimitError, *, source: str) -> None:
+        cooldown_s = self._rate_limit_cooldown_seconds(exc)
+        now = time.monotonic()
+        until = now + float(cooldown_s)
+        self._live_rate_limited_until_monotonic = max(self._live_rate_limited_until_monotonic, until)
+        self._live_rate_limit_message = str(exc or "Rate limit exceeded.").strip() or "Rate limit exceeded."
+        logger.warning(
+            "LIVE_RATE_LIMIT_COOLDOWN source=%s cooldown_seconds=%s message=%s",
+            source,
+            cooldown_s,
+            self._truncate_log_text(self._live_rate_limit_message),
+        )
+        self.status_received.emit(self._live_rate_limit_message)
+
+    def _active_rate_limit_error(self) -> Optional[RateLimitError]:
+        now = time.monotonic()
+        if now >= self._live_rate_limited_until_monotonic:
+            self._live_rate_limited_until_monotonic = 0.0
+            self._live_rate_limit_message = ""
+            return None
+        retry_after_seconds = max(1, int(math.ceil(self._live_rate_limited_until_monotonic - now)))
+        message = self._live_rate_limit_message or "Rate limit exceeded."
+        return RateLimitError(message, retry_after_seconds=retry_after_seconds)
+
     def _clear_resume_handle(self, *, reason: str = "") -> None:
         handle = str(self._resume_handle or "").strip()
         if not handle:
@@ -764,6 +812,11 @@ class LiveSessionManager(QObject):
             return False
         if not self.is_available:
             self.error_received.emit(self.unavailable_reason)
+            return False
+
+        rate_limit_error = self._active_rate_limit_error()
+        if rate_limit_error is not None:
+            self.error_received.emit(str(rate_limit_error))
             return False
 
         self._clear_manual_disconnect_request()
@@ -1370,12 +1423,17 @@ class LiveSessionManager(QObject):
             existing = list(self._pending_text_commands)
             replaced = clean in existing
             retained = [item for item in existing if item != clean]
+            queue_maxlen = self._pending_text_commands.maxlen
             self._pending_text_commands.clear()
             self._pending_text_commands.append(clean)
-            for item in retained:
-                if len(self._pending_text_commands) >= self._pending_text_commands.maxlen:
-                    break
-                self._pending_text_commands.append(item)
+            if queue_maxlen is None:
+                for item in retained:
+                    self._pending_text_commands.append(item)
+            else:
+                for item in retained:
+                    if len(self._pending_text_commands) >= queue_maxlen:
+                        break
+                    self._pending_text_commands.append(item)
             depth = len(self._pending_text_commands)
         return depth, replaced
 
@@ -1383,6 +1441,9 @@ class LiveSessionManager(QObject):
         self._queue_pending_text_command(text)
 
     def _schedule_pending_text_command_flush(self, *, reason: str) -> bool:
+        if self._active_rate_limit_error() is not None:
+            return False
+
         with self._turn_state_lock:
             if (
                 self._pending_text_command_flush_in_progress
@@ -1449,6 +1510,7 @@ class LiveSessionManager(QObject):
                     and self._active_text_turn_id is None
                     and not self._shutdown_event.is_set()
                     and not self.broker.has_pending()
+                    and self._active_rate_limit_error() is None
                 )
             if reschedule:
                 self._schedule_pending_text_command_flush(reason="queue_followup")
@@ -1840,6 +1902,7 @@ class LiveSessionManager(QObject):
         except asyncio.CancelledError:
             return
         except RateLimitError as exc:
+            self._apply_rate_limit_cooldown(exc, source="background_task")
             logger.warning("Gemini Live rate limited: %s", exc)
             self.session_state_changed.emit("disconnected")
             self.error_received.emit(str(exc))
@@ -1912,11 +1975,18 @@ class LiveSessionManager(QObject):
             raise
 
     async def _ensure_session_with_retry(self, retries: int = 1):
+        active_rate_limit_error = self._active_rate_limit_error()
+        if active_rate_limit_error is not None:
+            raise active_rate_limit_error
+
         attempt = 0
         retried_without_resumption = False
         while True:
             try:
                 return await self._ensure_session()
+            except RateLimitError as exc:
+                self._apply_rate_limit_cooldown(exc, source="connect")
+                raise
             except Exception as exc:  # noqa: BLE001
                 if self._is_nonrecoverable_request_error(exc):
                     had_resume_handle = bool(str(self._resume_handle or "").strip())
@@ -2424,6 +2494,7 @@ class LiveSessionManager(QObject):
             raise
         except RateLimitError as exc:
             logger.warning("Live receive loop rate limited: %s", exc)
+            self._apply_rate_limit_cooldown(exc, source="receive_loop")
             self._finish_text_turn(error=str(exc))
             self.error_received.emit(str(exc))
             if self.enabled and not self._shutdown_event.is_set():

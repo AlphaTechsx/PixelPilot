@@ -101,6 +101,24 @@ function statusSurfaceIsActive(snapshot: RuntimeSnapshot | null): boolean {
   return latest.done !== true && !isDoneStatus(latest.status);
 }
 
+function isPersistentLiveStatus(snapshot: RuntimeSnapshot | null): boolean {
+  if (!snapshot || snapshot.auth.needsAuth) {
+    return false;
+  }
+  const liveStatus = snapshot.liveStatus;
+  if (!liveStatus || liveStatus.level === 'idle') {
+    return false;
+  }
+  const code = String(liveStatus.code || '').trim().toLowerCase();
+  const message = String(liveStatus.message || '').trim().toLowerCase();
+  return (
+    code.includes('rate_limited')
+    || code.includes('rate-limit')
+    || message.includes('rate limit')
+    || message.includes('daily time limit exceeded')
+  );
+}
+
 function actionUpdateLabel(snapshot: RuntimeSnapshot | null): string {
   const latest = latestActionUpdate(snapshot);
   if (!latest) {
@@ -196,6 +214,7 @@ export class WindowManager {
   private initialPostLoginHideApplied = false;
   private previousWakeWordState = '';
   private previousLiveVoiceActive = false;
+  private wakeStateInitialized = false;
   private wakeNotchActive = false;
   private notchTextInitialized = false;
   private previousNotchSurfaceText = '';
@@ -675,8 +694,7 @@ export class WindowManager {
       this.overlayWindow?.hide();
       if (notchShouldShow) {
         this.anchorWindow('notch');
-        this.elevateStatusSurface(this.notchWindow);
-        this.notchWindow?.showInactive();
+        this.ensureStatusSurfaceVisible(this.notchWindow);
       } else {
         this.notchWindow?.hide();
       }
@@ -686,8 +704,7 @@ export class WindowManager {
       this.overlayWindow?.show();
       if (notchShouldShow) {
         this.anchorWindow('notch');
-        this.elevateStatusSurface(this.notchWindow);
-        this.notchWindow?.showInactive();
+        this.ensureStatusSurfaceVisible(this.notchWindow);
       } else {
         this.notchWindow?.hide();
       }
@@ -695,8 +712,7 @@ export class WindowManager {
 
     if (activeStatus && this.uiPreferences.cornerGlowEnabled) {
       this.anchorWindow('glow');
-      this.elevateStatusSurface(this.glowWindow);
-      this.glowWindow?.showInactive();
+      this.ensureStatusSurfaceVisible(this.glowWindow);
     } else {
       this.glowWindow?.hide();
     }
@@ -880,6 +896,17 @@ export class WindowManager {
     window.moveTop();
   }
 
+  private ensureStatusSurfaceVisible(window: BrowserWindowType | null): void {
+    if (!window || window.isDestroyed()) {
+      return;
+    }
+    if (window.isVisible()) {
+      return;
+    }
+    this.elevateStatusSurface(window);
+    window.showInactive();
+  }
+
   private async toggleBackground(): Promise<void> {
     const next = !Boolean(this.currentSnapshot?.backgroundHidden);
     await this.setBackgroundHidden(next);
@@ -980,7 +1007,7 @@ export class WindowManager {
     }
     const liveState = String(snapshot.liveSessionState || '').trim().toLowerCase();
     const wakeWordState = String(snapshot.wakeWordState || '').trim().toLowerCase();
-    if (liveState === 'disconnected' && wakeWordState === 'armed') {
+    if (liveState === 'disconnected' && wakeWordState === 'armed' && !isPersistentLiveStatus(snapshot)) {
       return false;
     }
     return statusSurfaceIsActive(snapshot) || this.wakeNotchActive || this.hasNotchVisibilityTail();
@@ -995,7 +1022,7 @@ export class WindowManager {
     }
     const liveState = String(snapshot.liveSessionState || '').trim().toLowerCase();
     const wakeWordState = String(snapshot.wakeWordState || '').trim().toLowerCase();
-    if (liveState === 'disconnected' && wakeWordState === 'armed') {
+    if (liveState === 'disconnected' && wakeWordState === 'armed' && !isPersistentLiveStatus(snapshot)) {
       this.notchVisibleUntil = 0;
       this.scheduleNotchVisibilityTimer();
     }
@@ -1039,8 +1066,21 @@ export class WindowManager {
     const liveVoiceActive = Boolean(snapshot.liveVoiceActive);
     if (snapshot.auth.needsAuth) {
       this.wakeNotchActive = false;
+      this.wakeStateInitialized = false;
       this.previousWakeWordState = wakeWordState;
       this.previousLiveVoiceActive = liveVoiceActive;
+      this.clearTransientGlow();
+      return;
+    }
+
+    if (!this.wakeStateInitialized) {
+      this.wakeStateInitialized = true;
+      this.wakeNotchActive = false;
+      this.previousWakeWordState = wakeWordState;
+      this.previousLiveVoiceActive = liveVoiceActive;
+      if (wakeWordState === 'armed' && liveState === 'disconnected' && !liveVoiceActive) {
+        this.clearTransientGlow();
+      }
       return;
     }
 
@@ -1050,6 +1090,7 @@ export class WindowManager {
       && !liveVoiceActive
     ) {
       this.wakeNotchActive = false;
+      this.clearTransientGlow();
     } else if (
       (wakeWordState === 'paused' && this.previousWakeWordState === 'armed')
       || (liveVoiceActive && !this.previousLiveVoiceActive && this.previousWakeWordState === 'armed')
