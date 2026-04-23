@@ -5,7 +5,6 @@ Initializes MongoDB and Redis at application startup using FastAPI lifespan.
 
 import os
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 import redis.asyncio as redis
 from dotenv import load_dotenv
@@ -50,7 +49,7 @@ def _validate_startup_configuration() -> tuple[str, str]:
         raise RuntimeError(f"Missing required env var: {required_key}")
 
     return mongodb_uri, redis_uri
-
+import asyncio
 
 @asynccontextmanager
 async def lifespan(app):
@@ -62,19 +61,34 @@ async def lifespan(app):
     mongodb_uri, redis_uri = _validate_startup_configuration()
 
     print("Connecting to MongoDB...")
-    _mongo_client = AsyncIOMotorClient(mongodb_uri)
+    _mongo_client = AsyncIOMotorClient(mongodb_uri, serverSelectionTimeoutMS=5000)
     _mongo_db = _mongo_client.pixelpilot
 
     print("Connecting to Redis...")
-    _redis_client = redis.from_url(redis_uri, decode_responses=True)
+    _redis_client = redis.from_url(
+        redis_uri,
+        decode_responses=True,
+        socket_timeout=5.0,
+        socket_connect_timeout=5.0,
+    )
 
-    await _mongo_client.admin.command("ping")
-    print("MongoDB connected successfully!")
+    try:
+        await asyncio.wait_for(_mongo_client.admin.command("ping"), timeout=5.0)
+        print("MongoDB connected successfully!")
+    except Exception as e:
+        print(f"FAILED to connect to MongoDB: {e}")
+        raise RuntimeError(f"Database connection timeout (MongoDB): {e}")
+
     import auth
 
     await auth.ensure_auth_indexes(_mongo_db)
-    await _redis_client.ping()
-    print("Redis connected successfully!")
+
+    try:
+        await asyncio.wait_for(_redis_client.ping(), timeout=5.0)
+        print("Redis connected successfully!")
+    except Exception as e:
+        print(f"FAILED to connect to Redis: {e}")
+        raise RuntimeError(f"Database connection timeout (Redis): {e}")
 
     yield
 
